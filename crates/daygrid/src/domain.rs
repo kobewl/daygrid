@@ -135,6 +135,39 @@ pub struct Status {
     pub expected_revision: i64,
     pub status: String,
 }
+/// MCP 删除：必须经用户在日格里确认。`reason` 会展示给用户，帮助判断是否批准。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Delete {
+    pub idempotency_key: String,
+    pub calendar_generation: String,
+    pub item_id: String,
+    pub expected_revision: i64,
+    pub reason: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Overview {
+    pub from_date: String,
+    pub to_date: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposalRef {
+    pub proposal_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Search {
+    pub query: String,
+    pub limit: Option<usize>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Decision {
+    pub proposal_id: String,
+    pub decision: String,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lifecycle {

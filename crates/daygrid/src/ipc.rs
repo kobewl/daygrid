@@ -10,6 +10,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -88,7 +89,10 @@ pub fn credential(dir: &Path, id: &str) -> Result<String> {
         .map_err(|_| Error::new("PERMISSION_DENIED", "连接凭据不存在，请在日格中创建连接。"))
 }
 pub fn exchange(dir: &Path, request: &Request) -> Result<Value> {
-    let mut socket = UnixStream::connect(dir.join("service.sock")).map_err(io_error)?;
+    let socket = UnixStream::connect(dir.join("service.sock")).map_err(io_error)?;
+    exchange_on(socket, request)
+}
+fn exchange_on(mut socket: UnixStream, request: &Request) -> Result<Value> {
     socket
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(io_error)?;
@@ -124,27 +128,97 @@ pub fn ping(dir: &Path) -> Result<Value> {
         },
     )
 }
-pub fn ensure_service(dir: &Path) -> Result<()> {
-    let compatible = |v: Value| -> Result<()> {
-        if v["ok"] == true
-            && v["data"]["ipc_version"] == IPC_VERSION
-            && v["data"]["service_version"] == env!("CARGO_PKG_VERSION")
-        {
-            Ok(())
-        } else {
-            Err(Error::new(
-                "VERSION_UNSUPPORTED",
-                "请退出旧日历服务后重新启动应用。",
-            ))
+/// 版本不一致时（典型场景：升级应用后，旧版本服务还在空闲等待退出），
+/// 终止旧服务，让新版本按需重新拉起。通过 socket 对端 PID 定位进程，
+/// 只会作用于确实在这个数据目录的 socket 上应答过 Daygrid 握手的进程。
+fn stop_service(dir: &Path) -> bool {
+    let socket_path = dir.join("service.sock");
+    let Ok(socket) = UnixStream::connect(&socket_path) else {
+        return true;
+    };
+    let pid = peer_pid(&socket);
+    drop(socket);
+    let Some(pid) = pid else { return false };
+    tracing::warn!(pid, "stopping stale daygrid-service from another version");
+    // SAFETY: 向一个已确认的本用户进程发送 SIGTERM；失败只会让下面的等待超时。
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if UnixStream::connect(&socket_path).is_err() {
+            return true;
         }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    false
+}
+#[cfg(target_os = "macos")]
+fn peer_pid(socket: &UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SOL_LOCAL = 0, LOCAL_PEERPID = 2（<sys/un.h>）
+    // SAFETY: 缓冲区与长度均有效，仅读取对端 PID。
+    let r = unsafe {
+        libc::getsockopt(
+            socket.as_raw_fd(),
+            0,
+            2,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut len,
+        )
+    };
+    (r == 0 && pid > 0).then_some(pid)
+}
+#[cfg(target_os = "linux")]
+fn peer_pid(socket: &UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: 缓冲区与长度均有效，仅读取对端凭据。
+    let r = unsafe {
+        libc::getsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (r == 0 && cred.pid > 0).then_some(cred.pid)
+}
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn peer_pid(_: &UnixStream) -> Option<i32> {
+    None
+}
+
+pub fn ensure_service(dir: &Path) -> Result<()> {
+    let compatible = |v: &Value| -> bool {
+        v["ok"] == true
+            && v["data"]["ipc_version"] == IPC_VERSION
+            && v["data"]["service_version"] == crate::VERSION
+    };
+    let incompatible = || {
+        Error::new(
+            "VERSION_UNSUPPORTED",
+            "旧版本的日历服务仍在运行且无法自动停止，请退出日格后重试。",
+        )
     };
     if let Ok(v) = ping(dir) {
-        return compatible(v);
+        if compatible(&v) {
+            return Ok(());
+        }
+        if !stop_service(dir) {
+            return Err(incompatible());
+        }
     }
     prepare(dir)?;
     let exe = std::env::current_exe().map_err(io_error)?;
     let service = exe.parent().unwrap().join("daygrid-service");
-    // Drain stdout completely away from MCP. Service logs contain no calendar content.
+    // 服务自己写日志文件；stdout/stderr 全部丢弃，保证不会污染 MCP 的 stdio。
     let child = Command::new(service)
         .env("DAYGRID_DATA_DIR", dir)
         .stdin(Stdio::null())
@@ -159,28 +233,58 @@ pub fn ensure_service(dir: &Path) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Ok(v) = ping(dir) {
-            return compatible(v);
+            return if compatible(&v) {
+                Ok(())
+            } else {
+                Err(incompatible())
+            };
         }
-        std::thread::sleep(Duration::from_millis(40));
+        std::thread::sleep(Duration::from_millis(25));
     }
     Err(Error::new(
         "SERVICE_UNAVAILABLE",
-        "日历服务启动失败，请检查安装和数据目录权限。",
+        "日历服务启动失败，请检查安装和数据目录权限，或查看日志目录。",
     ))
 }
+
+/// 最近一次确认过「服务在运行且版本兼容」的目录与时间。
+/// 之后 30 秒内的调用直接连接，省掉每次调用前的 ping 往返；
+/// 连接失败（服务已退出）时回退到完整流程，自动拉起新服务。
+static VERIFIED: Mutex<Option<(PathBuf, Instant)>> = Mutex::new(None);
+const VERIFY_TTL: Duration = Duration::from_secs(30);
+
+fn recently_verified(dir: &Path) -> bool {
+    VERIFIED
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .is_some_and(|(d, at)| d == dir && at.elapsed() < VERIFY_TTL)
+}
+fn set_verified(dir: &Path, ok: bool) {
+    if let Ok(mut g) = VERIFIED.lock() {
+        *g = ok.then(|| (dir.to_path_buf(), Instant::now()));
+    }
+}
+
 pub fn call(dir: &Path, actor: &str, token: &str, method: &str, args: Value) -> Value {
+    let request = Request {
+        ipc_version: IPC_VERSION,
+        actor: actor.into(),
+        token: token.into(),
+        method: method.into(),
+        args,
+    };
     (|| {
+        if recently_verified(dir) {
+            // 只有「连不上」才重试：连上之后的超时不能重发，否则非幂等的桌面操作会重复执行。
+            match UnixStream::connect(dir.join("service.sock")) {
+                Ok(socket) => return exchange_on(socket, &request),
+                Err(_) => set_verified(dir, false),
+            }
+        }
         ensure_service(dir)?;
-        exchange(
-            dir,
-            &Request {
-                ipc_version: IPC_VERSION,
-                actor: actor.into(),
-                token: token.into(),
-                method: method.into(),
-                args,
-            },
-        )
+        set_verified(dir, true);
+        exchange(dir, &request)
     })()
     .unwrap_or_else(|e: Error| e.value())
 }

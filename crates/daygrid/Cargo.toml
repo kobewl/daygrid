@@ -19,6 +19,10 @@ hex = "0.4"
 fs2 = "0.4"
 rmcp = { version = "=3.5.1", default-features = false, features = ["server", "client", "transport-io", "transport-child-process"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process"] }
+libc = "0.2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "std", "registry"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,14 +1,16 @@
 {
   "schema_version": 1,
+  "contract_version": "0.2",
   "tools": [
     {
       "name": "daygrid_get_context",
-      "description": "Get explicit calendar date, timezone, generation and supported limits.",
+      "title": "Get calendar context",
+      "description": "Start here. Returns today's date, weekday, calendar timezone, calendar_generation (required by every write), colors, limits and the approval mode.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {},
-        "required": []
+        "required": [],
+        "properties": {}
       },
       "outputSchema": {
         "type": "object",
@@ -16,6 +18,11 @@
           {
             "type": "object",
             "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
             "properties": {
               "schema_version": {
                 "const": 1
@@ -24,7 +31,8 @@
                 "const": true
               },
               "data": {
-                "type": "object"
+                "type": "object",
+                "description": "today, weekday, week_starts_on, calendar_timezone, calendar_generation, supported_date_range, max_query_days, max_page_size, colors, change_sequence, approval_mode, service_version"
               },
               "operation_id": {
                 "type": "string",
@@ -37,12 +45,7 @@
                 "type": "integer",
                 "minimum": 0
               }
-            },
-            "required": [
-              "schema_version",
-              "ok",
-              "data"
-            ]
+            }
           },
           {
             "type": "object",
@@ -80,6 +83,10 @@
                   },
                   "details": {
                     "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
                   }
                 }
               }
@@ -88,6 +95,181 @@
         ]
       },
       "annotations": {
+        "title": "Get calendar context",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "daygrid_month_overview",
+      "title": "Overview of busy days",
+      "description": "Per-day counts (planned/done) and colors for a date range of at most 366 days. Cheap way to see which days have items before listing them.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from_date",
+          "to_date"
+        ],
+        "properties": {
+          "from_date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "from_date",
+                  "to_date",
+                  "total_items",
+                  "days"
+                ],
+                "properties": {
+                  "from_date": {
+                    "type": "string",
+                    "format": "date",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "to_date": {
+                    "type": "string",
+                    "format": "date",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "total_items": {
+                    "type": "integer"
+                  },
+                  "days": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "date",
+                        "planned",
+                        "done",
+                        "colors"
+                      ],
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "format": "date",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "planned": {
+                          "type": "integer"
+                        },
+                        "done": {
+                          "type": "integer"
+                        },
+                        "colors": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "blue",
+                              "sage",
+                              "amber",
+                              "rose",
+                              "violet",
+                              "gray"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "title": "Overview of busy days",
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
@@ -95,10 +277,15 @@
     },
     {
       "name": "daygrid_list_items",
-      "description": "List authorized items within an inclusive date range, at most 366 days.",
+      "title": "List items in a date range",
+      "description": "List items within an inclusive date range of at most 366 days, optionally filtered by text, color or status. Paged: follow next_cursor until it is null.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "from_date",
+          "to_date"
+        ],
         "properties": {
           "from_date": {
             "type": "string",
@@ -113,7 +300,8 @@
           "query": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 200,
+            "description": "Case-insensitive match on title or notes."
           },
           "color": {
             "type": "string",
@@ -143,11 +331,7 @@
             "maximum": 100,
             "default": 50
           }
-        },
-        "required": [
-          "from_date",
-          "to_date"
-        ]
+        }
       },
       "outputSchema": {
         "type": "object",
@@ -155,6 +339,11 @@
           {
             "type": "object",
             "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
             "properties": {
               "schema_version": {
                 "const": 1
@@ -163,7 +352,93 @@
                 "const": true
               },
               "data": {
-                "type": "object"
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "items",
+                  "next_cursor",
+                  "snapshot_sequence"
+                ],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "title": "Daygrid calendar item",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "date",
+                        "title",
+                        "notes",
+                        "color",
+                        "status",
+                        "revision",
+                        "created_at",
+                        "updated_at"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "date": {
+                          "type": "string",
+                          "format": "date",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "notes": {
+                          "type": "string",
+                          "maxLength": 10000
+                        },
+                        "color": {
+                          "type": "string",
+                          "enum": [
+                            "blue",
+                            "sage",
+                            "amber",
+                            "rose",
+                            "violet",
+                            "gray"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "planned",
+                            "done"
+                          ]
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  },
+                  "next_cursor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "snapshot_sequence": {
+                    "type": "integer"
+                  }
+                }
               },
               "operation_id": {
                 "type": "string",
@@ -176,12 +451,7 @@
                 "type": "integer",
                 "minimum": 0
               }
-            },
-            "required": [
-              "schema_version",
-              "ok",
-              "data"
-            ]
+            }
           },
           {
             "type": "object",
@@ -219,6 +489,10 @@
                   },
                   "details": {
                     "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
                   }
                 }
               }
@@ -227,6 +501,7 @@
         ]
       },
       "annotations": {
+        "title": "List items in a date range",
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
@@ -234,154 +509,19 @@
     },
     {
       "name": "daygrid_get_item",
-      "description": "Get one active item by UUID.",
+      "title": "Get one item",
+      "description": "Get one active item by UUID, including its current revision.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "item_id"
+        ],
         "properties": {
           "item_id": {
             "type": "string",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "item_id"
-        ]
-      },
-      "outputSchema": {
-        "type": "object",
-        "oneOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "schema_version": {
-                "const": 1
-              },
-              "ok": {
-                "const": true
-              },
-              "data": {
-                "type": "object"
-              },
-              "operation_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "replayed": {
-                "type": "boolean"
-              },
-              "change_sequence": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "schema_version",
-              "ok",
-              "data"
-            ]
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "schema_version",
-              "ok",
-              "error"
-            ],
-            "properties": {
-              "schema_version": {
-                "const": 1
-              },
-              "ok": {
-                "const": false
-              },
-              "error": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "code",
-                  "message",
-                  "retryable",
-                  "details"
-                ],
-                "properties": {
-                  "code": {
-                    "type": "string"
-                  },
-                  "message": {
-                    "type": "string"
-                  },
-                  "retryable": {
-                    "type": "boolean"
-                  },
-                  "details": {
-                    "type": "object"
-                  }
-                }
-              }
-            }
-          }
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "daygrid_create_item",
-      "description": "Create one dated item in the authorized local calendar. Date must be explicit.",
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false
-      },
-      "inputSchema": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "idempotency_key",
-          "calendar_generation",
-          "date",
-          "title"
-        ],
-        "properties": {
-          "date": {
-            "type": "string",
-            "format": "date",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "notes": {
-            "type": "string",
-            "maxLength": 10000
-          },
-          "color": {
-            "type": "string",
-            "enum": [
-              "blue",
-              "sage",
-              "amber",
-              "rose",
-              "violet",
-              "gray"
-            ]
-          },
-          "idempotency_key": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "calendar_generation": {
-            "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Item UUID from a previous read."
           }
         }
       },
@@ -394,9 +534,6 @@
             "required": [
               "schema_version",
               "ok",
-              "operation_id",
-              "replayed",
-              "change_sequence",
               "data"
             ],
             "properties": {
@@ -405,17 +542,6 @@
               },
               "ok": {
                 "const": true
-              },
-              "operation_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "replayed": {
-                "type": "boolean"
-              },
-              "change_sequence": {
-                "type": "integer",
-                "minimum": 0
               },
               "data": {
                 "type": "object",
@@ -489,11 +615,19 @@
                         "format": "date-time"
                       }
                     }
-                  },
-                  "changed": {
-                    "type": "boolean"
                   }
                 }
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
               }
             }
           },
@@ -533,36 +667,334 @@
                   },
                   "details": {
                     "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
                   }
                 }
               }
             }
           }
         ]
+      },
+      "annotations": {
+        "title": "Get one item",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "daygrid_create_item",
+      "title": "Create an item",
+      "description": "Create one dated item. The date must be explicit (YYYY-MM-DD); resolve relative dates such as 'next Friday' with daygrid_get_context first.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "date",
+          "title"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "blue",
+              "sage",
+              "amber",
+              "rose",
+              "violet",
+              "gray"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Fresh UUID per new request. Reuse ONLY to retry the identical request."
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid",
+            "description": "From daygrid_get_context."
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "item"
+                    ],
+                    "properties": {
+                      "item": {
+                        "title": "Daygrid calendar item",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "date",
+                          "title",
+                          "notes",
+                          "color",
+                          "status",
+                          "revision",
+                          "created_at",
+                          "updated_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "date": {
+                            "type": "string",
+                            "format": "date",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "notes": {
+                            "type": "string",
+                            "maxLength": 10000
+                          },
+                          "color": {
+                            "type": "string",
+                            "enum": [
+                              "blue",
+                              "sage",
+                              "amber",
+                              "rose",
+                              "violet",
+                              "gray"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "planned",
+                              "done"
+                            ]
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updated_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "changed": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pending_approval",
+                      "proposal",
+                      "message"
+                    ],
+                    "properties": {
+                      "pending_approval": {
+                        "type": "boolean"
+                      },
+                      "proposal": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "state",
+                          "summary",
+                          "created_at",
+                          "expires_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "rejected",
+                              "expired",
+                              "failed"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "expires_at": {
+                            "type": "string"
+                          },
+                          "decided_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "object",
+                            "description": "Present when approved: the applied change ({item, changed})."
+                          },
+                          "error": {
+                            "type": "object",
+                            "description": "Present when failed: the structured error."
+                          }
+                        }
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "title": "Create an item",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "idempotentHint": true
       }
     },
     {
       "name": "daygrid_update_item",
-      "description": "Update selected fields using the current generation and item revision.",
+      "title": "Update an item",
+      "description": "Change selected fields of an item. Requires the item's current expected_revision; on REVISION_CONFLICT re-read and decide again.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "item_id",
+          "expected_revision",
+          "patch"
+        ],
         "properties": {
-          "idempotency_key": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "calendar_generation": {
-            "type": "string",
-            "format": "uuid"
-          },
           "item_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Item UUID from a previous read."
           },
           "expected_revision": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "The item's revision from your latest read."
           },
           "patch": {
             "type": "object",
@@ -595,15 +1027,18 @@
                 ]
               }
             }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Fresh UUID per new request. Reuse ONLY to retry the identical request."
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid",
+            "description": "From daygrid_get_context."
           }
-        },
-        "required": [
-          "idempotency_key",
-          "calendar_generation",
-          "item_id",
-          "expected_revision",
-          "patch"
-        ]
+        }
       },
       "outputSchema": {
         "type": "object",
@@ -611,6 +1046,11 @@
           {
             "type": "object",
             "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
             "properties": {
               "schema_version": {
                 "const": 1
@@ -619,7 +1059,153 @@
                 "const": true
               },
               "data": {
-                "type": "object"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "item"
+                    ],
+                    "properties": {
+                      "item": {
+                        "title": "Daygrid calendar item",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "date",
+                          "title",
+                          "notes",
+                          "color",
+                          "status",
+                          "revision",
+                          "created_at",
+                          "updated_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "date": {
+                            "type": "string",
+                            "format": "date",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "notes": {
+                            "type": "string",
+                            "maxLength": 10000
+                          },
+                          "color": {
+                            "type": "string",
+                            "enum": [
+                              "blue",
+                              "sage",
+                              "amber",
+                              "rose",
+                              "violet",
+                              "gray"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "planned",
+                              "done"
+                            ]
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updated_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "changed": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pending_approval",
+                      "proposal",
+                      "message"
+                    ],
+                    "properties": {
+                      "pending_approval": {
+                        "type": "boolean"
+                      },
+                      "proposal": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "state",
+                          "summary",
+                          "created_at",
+                          "expires_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "rejected",
+                              "expired",
+                              "failed"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "expires_at": {
+                            "type": "string"
+                          },
+                          "decided_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "object",
+                            "description": "Present when approved: the applied change ({item, changed})."
+                          },
+                          "error": {
+                            "type": "object",
+                            "description": "Present when failed: the structured error."
+                          }
+                        }
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
               },
               "operation_id": {
                 "type": "string",
@@ -632,12 +1218,7 @@
                 "type": "integer",
                 "minimum": 0
               }
-            },
-            "required": [
-              "schema_version",
-              "ok",
-              "data"
-            ]
+            }
           },
           {
             "type": "object",
@@ -675,6 +1256,10 @@
                   },
                   "details": {
                     "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
                   }
                 }
               }
@@ -683,33 +1268,37 @@
         ]
       },
       "annotations": {
+        "title": "Update an item",
         "readOnlyHint": false,
         "destructiveHint": false,
-        "openWorldHint": false
+        "openWorldHint": false,
+        "idempotentHint": true
       }
     },
     {
       "name": "daygrid_set_item_status",
-      "description": "Change planned or done status with revision protection.",
+      "title": "Mark done or planned",
+      "description": "Mark an item done or planned again.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "item_id",
+          "expected_revision",
+          "status"
+        ],
         "properties": {
-          "idempotency_key": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "calendar_generation": {
-            "type": "string",
-            "format": "uuid"
-          },
           "item_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Item UUID from a previous read."
           },
           "expected_revision": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "The item's revision from your latest read."
           },
           "status": {
             "type": "string",
@@ -717,15 +1306,18 @@
               "planned",
               "done"
             ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Fresh UUID per new request. Reuse ONLY to retry the identical request."
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid",
+            "description": "From daygrid_get_context."
           }
-        },
-        "required": [
-          "idempotency_key",
-          "calendar_generation",
-          "item_id",
-          "expected_revision",
-          "status"
-        ]
+        }
       },
       "outputSchema": {
         "type": "object",
@@ -733,6 +1325,11 @@
           {
             "type": "object",
             "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
             "properties": {
               "schema_version": {
                 "const": 1
@@ -741,7 +1338,153 @@
                 "const": true
               },
               "data": {
-                "type": "object"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "item"
+                    ],
+                    "properties": {
+                      "item": {
+                        "title": "Daygrid calendar item",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "date",
+                          "title",
+                          "notes",
+                          "color",
+                          "status",
+                          "revision",
+                          "created_at",
+                          "updated_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "date": {
+                            "type": "string",
+                            "format": "date",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "notes": {
+                            "type": "string",
+                            "maxLength": 10000
+                          },
+                          "color": {
+                            "type": "string",
+                            "enum": [
+                              "blue",
+                              "sage",
+                              "amber",
+                              "rose",
+                              "violet",
+                              "gray"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "planned",
+                              "done"
+                            ]
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updated_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "changed": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pending_approval",
+                      "proposal",
+                      "message"
+                    ],
+                    "properties": {
+                      "pending_approval": {
+                        "type": "boolean"
+                      },
+                      "proposal": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "state",
+                          "summary",
+                          "created_at",
+                          "expires_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "rejected",
+                              "expired",
+                              "failed"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "expires_at": {
+                            "type": "string"
+                          },
+                          "decided_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "object",
+                            "description": "Present when approved: the applied change ({item, changed})."
+                          },
+                          "error": {
+                            "type": "object",
+                            "description": "Present when failed: the structured error."
+                          }
+                        }
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
               },
               "operation_id": {
                 "type": "string",
@@ -754,12 +1497,7 @@
                 "type": "integer",
                 "minimum": 0
               }
-            },
-            "required": [
-              "schema_version",
-              "ok",
-              "data"
-            ]
+            }
           },
           {
             "type": "object",
@@ -797,6 +1535,10 @@
                   },
                   "details": {
                     "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
                   }
                 }
               }
@@ -805,7 +1547,454 @@
         ]
       },
       "annotations": {
+        "title": "Mark done or planned",
         "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "daygrid_delete_item",
+      "title": "Request deletion of an item",
+      "description": "Ask to delete an item. NEVER executes immediately: the user must approve it in Daygrid (deleted items stay recoverable from the history). Returns pending_approval and a proposal id; poll daygrid_get_proposal. Give a short reason so the user can decide.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "item_id",
+          "expected_revision"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Item UUID from a previous read."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The item's revision from your latest read."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Shown to the user when asking for approval."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Fresh UUID per new request. Reuse ONLY to retry the identical request."
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid",
+            "description": "From daygrid_get_context."
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "item"
+                    ],
+                    "properties": {
+                      "item": {
+                        "title": "Daygrid calendar item",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "date",
+                          "title",
+                          "notes",
+                          "color",
+                          "status",
+                          "revision",
+                          "created_at",
+                          "updated_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "date": {
+                            "type": "string",
+                            "format": "date",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "notes": {
+                            "type": "string",
+                            "maxLength": 10000
+                          },
+                          "color": {
+                            "type": "string",
+                            "enum": [
+                              "blue",
+                              "sage",
+                              "amber",
+                              "rose",
+                              "violet",
+                              "gray"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "planned",
+                              "done"
+                            ]
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updated_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      },
+                      "changed": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pending_approval",
+                      "proposal",
+                      "message"
+                    ],
+                    "properties": {
+                      "pending_approval": {
+                        "type": "boolean"
+                      },
+                      "proposal": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "state",
+                          "summary",
+                          "created_at",
+                          "expires_at"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "rejected",
+                              "expired",
+                              "failed"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "expires_at": {
+                            "type": "string"
+                          },
+                          "decided_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "object",
+                            "description": "Present when approved: the applied change ({item, changed})."
+                          },
+                          "error": {
+                            "type": "object",
+                            "description": "Present when failed: the structured error."
+                          }
+                        }
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "title": "Request deletion of an item",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "daygrid_get_proposal",
+      "title": "Check an approval request",
+      "description": "Check whether the user has approved, rejected or ignored a pending request. state is pending, approved (see result), rejected, expired or failed (see error). With wait_seconds the call waits up to that long for a decision instead of returning immediately.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposal_id"
+        ],
+        "properties": {
+          "proposal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 25,
+            "default": 0,
+            "description": "Long-poll up to this many seconds while pending."
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "proposal"
+                ],
+                "properties": {
+                  "proposal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "state",
+                      "summary",
+                      "created_at",
+                      "expires_at"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "pending",
+                          "approved",
+                          "rejected",
+                          "expired",
+                          "failed"
+                        ]
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "expires_at": {
+                        "type": "string"
+                      },
+                      "decided_at": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "result": {
+                        "type": "object",
+                        "description": "Present when approved: the applied change ({item, changed})."
+                      },
+                      "error": {
+                        "type": "object",
+                        "description": "Present when failed: the structured error."
+                      }
+                    }
+                  }
+                }
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "title": "Check an approval request",
+        "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
       }

@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 daygrid = { path = "../../crates/daygrid" }
 tauri = { version = "2", features = [] }
 serde_json.workspace = true
+tracing = "0.1"
 
 [features]
 default = ["custom-protocol"]
