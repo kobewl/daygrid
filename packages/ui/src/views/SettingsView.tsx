@@ -97,7 +97,7 @@ export function SettingsView({
       <header className="view-head">
         <div>
           <h1>设置</h1>
-          <p className="muted">外观与周起始日只保存在这台电脑上；其余设置会影响 AI 助手的行为。</p>
+          <p className="muted">外观与周起始日只保存在这台电脑上；权限设置控制 MCP 客户端如何访问日历。</p>
         </div>
       </header>
 
@@ -129,7 +129,7 @@ export function SettingsView({
       </section>
 
       <section className="card">
-        <h2>AI 助手的权限</h2>
+        <h2>MCP 连接权限</h2>
         <Row
           title="需要你确认的操作"
           desc="删除事项永远需要确认；你也可以让助手的所有写入（新建、修改）都先经过你。"

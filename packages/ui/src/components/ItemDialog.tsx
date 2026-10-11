@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { ApiError, colorName, colors, type Item } from "../api";
-import { MAX_DATE, MIN_DATE, dayTitle } from "../lib/dates";
+import { ApiError, type Item } from "../api";
+import { MAX_DATE, MIN_DATE } from "../lib/dates";
 import { diffItems } from "../lib/labels";
 import { cx } from "../lib/util";
 import { Icon } from "./icons";
@@ -17,7 +17,7 @@ export type Draft = {
 };
 
 export type DialogTarget =
-  | { mode: "create"; date: string; color: string }
+  | { mode: "create"; date: string }
   | { mode: "edit"; item: Item };
 
 const len = (s: string) => [...s].length;
@@ -48,7 +48,13 @@ export function ItemDialog({
             color: target.item.color,
             status: target.item.status,
           }
-        : { revision: 0, date: target.date, title: "", notes: "", color: target.color },
+        : {
+            revision: 0,
+            date: target.date,
+            title: "",
+            notes: "",
+            color: "sage",
+          },
     [target],
   );
   const [draft, setDraft] = useState<Draft>(original);
@@ -103,11 +109,19 @@ export function ItemDialog({
 
   // 冲突时对比：「我的草稿」相对「服务里的最新版本」差在哪。
   const conflictDiff = conflict
-    ? diffItems(conflict, { ...conflict, ...draft, status: conflict.status } as Item)
+    ? diffItems(conflict, {
+        ...conflict,
+        ...draft,
+        status: conflict.status,
+      } as Item)
     : [];
 
   return (
-    <Modal label={edit ? "编辑事项" : "添加事项"} onClose={requestClose} className="dialog">
+    <Modal
+      label={edit ? "编辑事项" : "添加事项"}
+      onClose={requestClose}
+      className="dialog"
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -121,8 +135,18 @@ export function ItemDialog({
         }}
       >
         <header className="dialog-head">
-          <h2>{edit ? "编辑事项" : "添加事项"}</h2>
-          <button type="button" className="btn ghost icon-btn" aria-label="关闭" onClick={requestClose}>
+          <div>
+            <p className="eyebrow">
+              {edit ? "记录每一点进展" : "给重要的事，留一点时间"}
+            </p>
+            <h2>{edit ? "编辑事项" : "添加事项"}</h2>
+          </div>
+          <button
+            type="button"
+            className="btn ghost icon-btn"
+            aria-label="关闭"
+            onClick={requestClose}
+          >
             <Icon name="x" />
           </button>
         </header>
@@ -134,13 +158,15 @@ export function ItemDialog({
               <div>
                 <strong>这个事项刚刚被修改了</strong>
                 <p>
-                  可能是 AI 助手或另一处操作改过它。你的草稿还在，请选择如何处理：
+                  可能是 AI
+                  助手或另一处操作改过它。你的草稿还在，请选择如何处理：
                 </p>
                 {conflictDiff.length > 0 && (
                   <ul className="diff">
                     {conflictDiff.map((d) => (
                       <li key={d.label}>
-                        <b>{d.label}</b> 最新：<span>{d.from}</span> → 你的草稿：<span>{d.to}</span>
+                        <b>{d.label}</b> 最新：<span>{d.from}</span> →
+                        你的草稿：<span>{d.to}</span>
                       </li>
                     ))}
                   </ul>
@@ -181,65 +207,48 @@ export function ItemDialog({
             </div>
           )}
 
-          <label className="field">
+          <label className="field title-field">
             <span>标题</span>
             <input
               data-autofocus
               value={draft.title}
               maxLength={400}
               onChange={(e) => change("title", e.target.value)}
-              placeholder="要做什么？"
+              placeholder="记下你想做的事…"
               required
             />
           </label>
 
-          <div className="field-row">
-            <label className="field">
-              <span>日期</span>
-              <input
-                type="date"
-                value={draft.date}
-                min={MIN_DATE}
-                max={MAX_DATE}
-                onChange={(e) => change("date", e.target.value)}
-                required
-              />
-            </label>
-            <fieldset className="field">
-              <legend>颜色 · {colorName(draft.color)}</legend>
-              <div className="swatches" role="radiogroup" aria-label="颜色">
-                {colors.map(([id, name]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={draft.color === id}
-                    aria-label={name}
-                    title={name}
-                    className={cx("swatch-btn", `c-${id}`, draft.color === id && "on")}
-                    onClick={() => change("color", id)}
-                  >
-                    {draft.color === id && <Icon name="check" size={14} strokeWidth={2.6} />}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
-          </div>
+          <label className="field date-field">
+            <span>
+              <Icon name="calendar" size={14} /> 日期
+            </span>
+            <input
+              type="date"
+              value={draft.date}
+              min={MIN_DATE}
+              max={MAX_DATE}
+              onChange={(e) => change("date", e.target.value)}
+              required
+            />
+          </label>
 
           <label className="field">
             <span>
-              备注
+              备注 <span className="optional">可选</span>
               {len(draft.notes) > 8000 && (
-                <em className={cx("counter", len(draft.notes) > 10000 && "over")}>
+                <em
+                  className={cx("counter", len(draft.notes) > 10000 && "over")}
+                >
                   {len(draft.notes)} / 10000
                 </em>
               )}
             </span>
             <textarea
               value={draft.notes}
-              rows={5}
+              rows={3}
               onChange={(e) => change("notes", e.target.value)}
-              placeholder="补充细节（可选）"
+              placeholder="补充细节、想法，或需要记住的事"
             />
           </label>
 
@@ -254,10 +263,18 @@ export function ItemDialog({
               <div>
                 <strong>放弃未保存的修改？</strong>
                 <div className="actions">
-                  <button type="button" className="btn" onClick={() => setConfirmDiscard(false)}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setConfirmDiscard(false)}
+                  >
                     继续编辑
                   </button>
-                  <button type="button" className="btn danger" onClick={onClose}>
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={onClose}
+                  >
                     放弃
                   </button>
                 </div>
@@ -295,9 +312,15 @@ export function ItemDialog({
               </>
             )}
           </div>
-          <span className="hint">{dayTitle(draft.date || original.date)} · ⌘↵ 保存</span>
-          <button type="submit" className="btn primary" disabled={saving || !draft.title.trim()}>
-            {saving ? "保存中…" : "保存"}
+          <span className="hint">
+            <kbd>⌘ ↵</kbd> 保存
+          </span>
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={saving || !draft.title.trim()}
+          >
+            {saving ? "保存中…" : edit ? "保存修改" : "添加事项"}
           </button>
         </footer>
       </form>

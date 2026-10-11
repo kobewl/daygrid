@@ -260,9 +260,9 @@ export function AssistantsView({
     <div className="page">
       <header className="view-head">
         <div>
-          <h1>AI 助手</h1>
+          <h1>MCP 连接</h1>
           <p className="muted">
-            通过 MCP 让 AI 读取并管理你的日历。每个助手使用独立的连接，可以随时暂停或撤销。
+            让 Cursor、Claude 等客户端通过 MCP 访问你的日历。每个客户端使用独立连接，可以随时暂停或撤销。
           </p>
         </div>
         <button className="btn primary" onClick={() => setCreating((v) => !v)}>

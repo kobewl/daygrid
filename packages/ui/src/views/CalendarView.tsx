@@ -4,7 +4,13 @@ import { DayPanel } from "../components/DayPanel";
 import { Icon } from "../components/icons";
 import { MonthGrid } from "../components/MonthGrid";
 import type { Calendar } from "../hooks/useCalendar";
-import { MAX_DATE, MIN_DATE, addDays, monthTitle, type WeekStart } from "../lib/dates";
+import {
+  MAX_DATE,
+  MIN_DATE,
+  addDays,
+  monthTitle,
+  type WeekStart,
+} from "../lib/dates";
 import { isTyping } from "../lib/util";
 
 export function CalendarView({
@@ -37,7 +43,12 @@ export function CalendarView({
     if (!keysEnabled || !selected) return;
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
-      const step: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+      const step: Record<string, number> = {
+        ArrowLeft: -1,
+        ArrowRight: 1,
+        ArrowUp: -7,
+        ArrowDown: 7,
+      };
       if (e.key in step) {
         e.preventDefault();
         const next = addDays(selected, step[e.key]);
@@ -62,25 +73,46 @@ export function CalendarView({
   if (!context || !month || !selected) return null;
   const atMin = month <= MIN_DATE.slice(0, 7);
   const atMax = month >= MAX_DATE.slice(0, 7);
+  const monthItems = cal.items.filter((item) => item.date.startsWith(month));
+  const completed = monthItems.filter((item) => item.status === "done").length;
 
   return (
     <div className="calendar">
       <section className="calendar-main">
         <header className="view-head">
-          <h1>{monthTitle(month)}</h1>
+          <div className="month-heading">
+            <p className="eyebrow">{month.slice(0, 4)} 年 · 月历</p>
+            <h1 aria-label={monthTitle(month)}>{Number(month.slice(5))} 月</h1>
+          </div>
           <div className="head-actions">
             <div className="btn-group" role="group" aria-label="切换月份">
-              <button className="btn icon-btn" onClick={() => shiftMonth(-1)} disabled={atMin} aria-label="上个月" title="上个月（[）">
+              <button
+                className="btn icon-btn"
+                onClick={() => shiftMonth(-1)}
+                disabled={atMin}
+                aria-label="上个月"
+                title="上个月（[）"
+              >
                 <Icon name="left" />
               </button>
               <button className="btn" onClick={goToday} title="回到今天（T）">
                 今天
               </button>
-              <button className="btn icon-btn" onClick={() => shiftMonth(1)} disabled={atMax} aria-label="下个月" title="下个月（]）">
+              <button
+                className="btn icon-btn"
+                onClick={() => shiftMonth(1)}
+                disabled={atMax}
+                aria-label="下个月"
+                title="下个月（]）"
+              >
                 <Icon name="right" />
               </button>
             </div>
-            <button className="btn primary" onClick={() => onCreate(selected)} title="添加事项（N）">
+            <button
+              className="btn primary"
+              onClick={() => onCreate(selected)}
+              title="添加事项（N）"
+            >
               <Icon name="plus" size={16} />
               添加事项
             </button>
@@ -99,6 +131,14 @@ export function CalendarView({
           onOpen={onEdit}
           onMove={onMove}
         />
+        <footer className="calendar-foot">
+          <span>
+            {monthItems.length
+              ? `本月 ${monthItems.length} 项安排 · ${completed} 项已完成`
+              : "从一件小事，开始安排这个月"}
+          </span>
+          <span>双击日期添加 · 拖动事项改期</span>
+        </footer>
       </section>
       <DayPanel
         date={selected}

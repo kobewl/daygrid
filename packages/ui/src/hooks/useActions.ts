@@ -2,16 +2,12 @@ import { useCallback } from "react";
 import type { Item } from "../api";
 import type { Draft } from "../components/ItemDialog";
 import { dayTitle } from "../lib/dates";
-import type { Prefs } from "../lib/prefs";
+import { automaticColor } from "../lib/itemColor";
 import type { Calendar } from "./useCalendar";
 import { useNotify } from "./useToasts";
 
 /** 面向用户的操作：在数据层之上加上提示与「撤销」，界面各处共用。 */
-export function useActions(
-  cal: Calendar,
-  prefs: Prefs,
-  updatePrefs: (patch: Partial<Prefs>) => void,
-) {
+export function useActions(cal: Calendar) {
   const notify = useNotify();
   const fail = useCallback(
     (e: unknown) => notify((e as Error).message, { tone: "error" }),
@@ -20,7 +16,9 @@ export function useActions(
 
   const toggle = useCallback(
     (item: Item) => {
-      cal.setStatus(item.id, item.status === "done" ? "planned" : "done").catch(fail);
+      cal
+        .setStatus(item.id, item.status === "done" ? "planned" : "done")
+        .catch(fail);
     },
     [cal.setStatus, fail], // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -33,7 +31,8 @@ export function useActions(
           notify(`已删除「${item.title}」`, {
             action: {
               label: "撤销",
-              run: () => cal.restoreItem(deleted.id, deleted.revision).catch(fail),
+              run: () =>
+                cal.restoreItem(deleted.id, deleted.revision).catch(fail),
             },
           }),
         )
@@ -51,7 +50,10 @@ export function useActions(
         .updateItem(id, { date })
         .then(() =>
           notify(`「${item.title}」已移到 ${dayTitle(date)}`, {
-            action: { label: "撤销", run: () => cal.updateItem(id, { date: previous }).catch(fail) },
+            action: {
+              label: "撤销",
+              run: () => cal.updateItem(id, { date: previous }).catch(fail),
+            },
           }),
         )
         .catch(fail);
@@ -62,14 +64,19 @@ export function useActions(
   const quickAdd = useCallback(
     async (date: string, title: string) => {
       try {
-        await cal.createItem({ date, title, notes: "", color: prefs.lastColor });
+        await cal.createItem({
+          date,
+          title,
+          notes: "",
+          color: automaticColor(title),
+        });
         return true;
       } catch (e) {
         fail(e);
         return false;
       }
     },
-    [cal.createItem, prefs.lastColor, fail], // eslint-disable-line react-hooks/exhaustive-deps
+    [cal.createItem, fail], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   /** 对话框保存：失败时抛出，让对话框处理版本冲突并保留草稿。 */
@@ -79,15 +86,15 @@ export function useActions(
         date: draft.date,
         title: draft.title,
         notes: draft.notes,
-        color: draft.color,
+        color: draft.id ? draft.color : automaticColor(draft.title),
       };
-      if (draft.id) await cal.updateItem(draft.id, fields, { revision: draft.revision });
+      if (draft.id)
+        await cal.updateItem(draft.id, fields, { revision: draft.revision });
       else await cal.createItem(fields);
-      updatePrefs({ lastColor: draft.color });
       cal.goDate(draft.date);
       notify("已保存");
     },
-    [cal.updateItem, cal.createItem, cal.goDate, updatePrefs, notify], // eslint-disable-line react-hooks/exhaustive-deps
+    [cal.updateItem, cal.createItem, cal.goDate, notify], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const decide = useCallback(

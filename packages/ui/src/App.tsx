@@ -25,17 +25,20 @@ const VIEW_KEYS: Record<string, ViewId> = {
 function Shell() {
   const [prefs, updatePrefs] = usePrefs();
   const cal = useCalendar(prefs.weekStart);
-  const actions = useActions(cal, prefs, updatePrefs);
+  const actions = useActions(cal);
   const [view, setView] = useState<ViewId>("calendar");
   const [dialog, setDialog] = useState<DialogTarget>();
   const [palette, setPalette] = useState(false);
 
   const today = cal.context?.today;
   const createAt = useCallback(
-    (date: string) => setDialog({ mode: "create", date, color: prefs.lastColor }),
-    [prefs.lastColor],
+    (date: string) => setDialog({ mode: "create", date }),
+    [],
   );
-  const edit = useCallback((item: Item) => setDialog({ mode: "edit", item }), []);
+  const edit = useCallback(
+    (item: Item) => setDialog({ mode: "edit", item }),
+    [],
+  );
   const openView = useCallback((v: ViewId) => setView(v), []);
 
   // 全局快捷键：⌘K 面板，⌘1–4 / ⌘, 切页。
@@ -56,7 +59,12 @@ function Shell() {
   }, []);
 
   const commands = useMemo<Command[]>(() => {
-    const nav = (id: ViewId, label: string, icon: Command["icon"], hint: string): Command => ({
+    const nav = (
+      id: ViewId,
+      label: string,
+      icon: Command["icon"],
+      hint: string,
+    ): Command => ({
       id: "view-" + id,
       label: `打开${label}`,
       hint,
@@ -66,20 +74,91 @@ function Shell() {
     });
     const selected = cal.selected ?? today ?? "";
     return [
-      { id: "new", label: "添加事项", hint: "N", icon: "plus", keywords: "新建 创建 add", run: () => { setView("calendar"); createAt(selected); } },
-      { id: "today", label: "回到今天", hint: "T", icon: "calendar", keywords: "today", run: () => { setView("calendar"); cal.goToday(); } },
-      { id: "next", label: "下个月", hint: "]", icon: "right", run: () => { setView("calendar"); cal.shiftMonth(1); } },
-      { id: "prev", label: "上个月", hint: "[", icon: "left", run: () => { setView("calendar"); cal.shiftMonth(-1); } },
+      {
+        id: "new",
+        label: "添加事项",
+        hint: "N",
+        icon: "plus",
+        keywords: "新建 创建 add",
+        run: () => {
+          setView("calendar");
+          createAt(selected);
+        },
+      },
+      {
+        id: "today",
+        label: "回到今天",
+        hint: "T",
+        icon: "calendar",
+        keywords: "today",
+        run: () => {
+          setView("calendar");
+          cal.goToday();
+        },
+      },
+      {
+        id: "next",
+        label: "下个月",
+        hint: "]",
+        icon: "right",
+        run: () => {
+          setView("calendar");
+          cal.shiftMonth(1);
+        },
+      },
+      {
+        id: "prev",
+        label: "上个月",
+        hint: "[",
+        icon: "left",
+        run: () => {
+          setView("calendar");
+          cal.shiftMonth(-1);
+        },
+      },
       nav("calendar", "日历", "calendar", "⌘1"),
       nav("history", "修改记录", "history", "⌘2"),
-      nav("assistants", "AI 助手", "plug", "⌘3"),
+      nav("assistants", "MCP 连接", "plug", "⌘3"),
       nav("settings", "设置", "sliders", "⌘4"),
-      { id: "theme-light", label: "切换到浅色主题", icon: "sun", keywords: "theme light 外观", run: () => updatePrefs({ theme: "light" }) },
-      { id: "theme-dark", label: "切换到深色主题", icon: "moon", keywords: "theme dark 外观", run: () => updatePrefs({ theme: "dark" }) },
-      { id: "theme-system", label: "主题跟随系统", icon: "sliders", keywords: "theme system 外观", run: () => updatePrefs({ theme: "system" }) },
-      { id: "week", label: prefs.weekStart === 1 ? "每周改为从周日开始" : "每周改为从周一开始", icon: "calendar", keywords: "week 周起始", run: () => updatePrefs({ weekStart: prefs.weekStart === 1 ? 0 : 1 }) },
+      {
+        id: "theme-light",
+        label: "切换到浅色主题",
+        icon: "sun",
+        keywords: "theme light 外观",
+        run: () => updatePrefs({ theme: "light" }),
+      },
+      {
+        id: "theme-dark",
+        label: "切换到深色主题",
+        icon: "moon",
+        keywords: "theme dark 外观",
+        run: () => updatePrefs({ theme: "dark" }),
+      },
+      {
+        id: "theme-system",
+        label: "主题跟随系统",
+        icon: "sliders",
+        keywords: "theme system 外观",
+        run: () => updatePrefs({ theme: "system" }),
+      },
+      {
+        id: "week",
+        label:
+          prefs.weekStart === 1 ? "每周改为从周日开始" : "每周改为从周一开始",
+        icon: "calendar",
+        keywords: "week 周起始",
+        run: () => updatePrefs({ weekStart: prefs.weekStart === 1 ? 0 : 1 }),
+      },
     ];
-  }, [cal.selected, cal.goToday, cal.shiftMonth, createAt, today, prefs.weekStart, updatePrefs]);
+  }, [
+    cal.selected,
+    cal.goToday,
+    cal.shiftMonth,
+    createAt,
+    today,
+    prefs.weekStart,
+    updatePrefs,
+  ]);
 
   if (cal.fatal)
     return (
@@ -90,7 +169,10 @@ function Shell() {
         <button className="btn primary" onClick={() => void cal.retry()}>
           重试
         </button>
-        <small className="muted">如果反复失败，请完全退出并重新打开日格；日志在「设置 → 打开文件夹 → 日志」。</small>
+        <small className="muted">
+          如果反复失败，请完全退出并重新打开日格；日志在「设置 → 打开文件夹 →
+          日志」。
+        </small>
       </div>
     );
   if (!cal.context || !today)

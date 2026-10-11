@@ -6,7 +6,7 @@ export type ViewId = "calendar" | "history" | "assistants" | "settings";
 const NAV: { id: ViewId; label: string; icon: IconName; key: string }[] = [
   { id: "calendar", label: "日历", icon: "calendar", key: "1" },
   { id: "history", label: "修改记录", icon: "history", key: "2" },
-  { id: "assistants", label: "AI 助手", icon: "plug", key: "3" },
+  { id: "assistants", label: "MCP 连接", icon: "plug", key: "3" },
   { id: "settings", label: "设置", icon: "sliders", key: "4" },
 ];
 
@@ -31,7 +31,11 @@ export function Sidebar({
         </div>
       </div>
 
-      <button className="searchbox" onClick={onSearch} aria-label="搜索与命令（⌘K）">
+      <button
+        className="searchbox"
+        onClick={onSearch}
+        aria-label="搜索与命令（⌘K）"
+      >
         <Icon name="search" size={16} />
         <span>搜索或跳转…</span>
         <kbd>⌘K</kbd>
@@ -49,7 +53,10 @@ export function Sidebar({
               <Icon name={n.icon} />
               <span>{n.label}</span>
               {n.id === "assistants" && pending > 0 && (
-                <span className="badge-count" aria-label={`${pending} 个待确认`}>
+                <span
+                  className="badge-count"
+                  aria-label={`${pending} 个待确认`}
+                >
                   {pending}
                 </span>
               )}
@@ -57,6 +64,14 @@ export function Sidebar({
           </li>
         ))}
       </ul>
+      <div className="sidebar-foot">
+        <span className="sidebar-foot-mark">
+          <Icon name="calendar" size={15} /> 把每一天，安排清楚。
+        </span>
+        <small>
+          <kbd>N</kbd> 添加事项 <span>·</span> <kbd>T</kbd> 回到今天
+        </small>
+      </div>
     </nav>
   );
 }

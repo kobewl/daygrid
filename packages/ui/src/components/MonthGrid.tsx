@@ -1,6 +1,12 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Item } from "../api";
-import { MAX_DATE, MIN_DATE, weekdayNames, type WeekStart } from "../lib/dates";
+import {
+  MAX_DATE,
+  MIN_DATE,
+  parseISO,
+  weekdayNames,
+  type WeekStart,
+} from "../lib/dates";
 import { cx } from "../lib/util";
 
 type CellProps = {
@@ -39,6 +45,7 @@ const Cell = memo(function Cell(p: CellProps) {
       aria-disabled={disabled || undefined}
       className={cx(
         "cell",
+        [0, 6].includes(parseISO(p.date).getDay()) && "weekend",
         other && "other",
         p.date === p.today && "today",
         p.selected && "selected",
@@ -60,10 +67,14 @@ const Cell = memo(function Cell(p: CellProps) {
       }}
     >
       <div className="cell-head">
-        <span className="num">{day === 1 ? `${Number(p.date.slice(5, 7))}月${day}日` : day}</span>
+        <span className="num">
+          {day === 1 ? `${Number(p.date.slice(5, 7))}月${day}日` : day}
+        </span>
         {list.length > 0 && (
           <span className="dots" aria-hidden="true">
-            {list.length > shown && <span className="count">{list.length}</span>}
+            {list.length > shown && (
+              <span className="count">{list.length}</span>
+            )}
           </span>
         )}
       </div>
@@ -71,7 +82,11 @@ const Cell = memo(function Cell(p: CellProps) {
         {list.slice(0, shown).map((item) => (
           <button
             key={item.id}
-            className={cx("chip", `c-${item.color}`, item.status === "done" && "done")}
+            className={cx(
+              "chip",
+              `c-${item.color}`,
+              item.status === "done" && "done",
+            )}
             draggable
             title={item.title}
             onClick={(e) => {
@@ -93,7 +108,9 @@ const Cell = memo(function Cell(p: CellProps) {
             <span className="chip-title">{item.title}</span>
           </button>
         ))}
-        {list.length > shown && <span className="more">还有 {list.length - shown} 项</span>}
+        {list.length > shown && (
+          <span className="more">还有 {list.length - shown} 项</span>
+        )}
       </div>
     </div>
   );
@@ -126,36 +143,67 @@ export function MonthGrid({
 }) {
   const dragging = useRef<string>();
   const [dropDate, setDropDate] = useState<string>();
-  // 按单元格实际高度决定每格显示几条：头部约 38px，每条 20px，「还有 N 项」16px。
+  // 只展示包含当月日期的周，避免多出一整行下月的空格。
+  let visibleLength = grid.length;
+  while (
+    visibleLength > 28 &&
+    grid
+      .slice(visibleLength - 7, visibleLength)
+      .every((date) => !date.startsWith(month))
+  ) {
+    visibleLength -= 7;
+  }
+  // 跳转到相邻月日期时，仍将选中的日期所在周保留在视图中。
+  const selectedIndex = grid.indexOf(selected);
+  if (selectedIndex >= visibleLength)
+    visibleLength = Math.ceil((selectedIndex + 1) / 7) * 7;
+  const visibleGrid = grid.slice(0, visibleLength);
+  const rows = visibleGrid.length / 7;
+  // 按实际高度决定显示条数：头部与留白约 44px，每条含间距 26px。
   const cellsRef = useRef<HTMLDivElement>(null);
   const [cap, setCap] = useState({ cap: 2, capAll: 3 });
   useEffect(() => {
     const node = cellsRef.current;
     if (!node) return;
     const measure = () => {
-      const row = node.clientHeight / 6;
+      const row = node.clientHeight / rows;
       const next = {
-        cap: Math.max(1, Math.min(6, Math.floor((row - 38 - 16) / 20))),
-        capAll: Math.max(1, Math.min(6, Math.floor((row - 38) / 20))),
+        cap: Math.max(1, Math.min(6, Math.floor((row - 44 - 18) / 26))),
+        capAll: Math.max(1, Math.min(6, Math.floor((row - 44) / 26))),
       };
-      setCap((old) => (old.cap === next.cap && old.capAll === next.capAll ? old : next));
+      setCap((old) =>
+        old.cap === next.cap && old.capAll === next.capAll ? old : next,
+      );
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [rows]);
   return (
-    <div className={cx("month", loading && "loading")} role="grid" aria-label="月历" aria-busy={loading}>
+    <div
+      className={cx("month", loading && "loading")}
+      role="grid"
+      aria-label="月历"
+      aria-busy={loading}
+    >
       <div className="weekdays" role="row">
         {weekdayNames(weekStart).map((n) => (
-          <div key={n} role="columnheader">
+          <div
+            key={n}
+            role="columnheader"
+            className={n === "周六" || n === "周日" ? "weekend" : undefined}
+          >
             {n}
           </div>
         ))}
       </div>
-      <div className="cells" ref={cellsRef}>
-        {grid.map((date) => (
+      <div
+        className="cells"
+        ref={cellsRef}
+        style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}
+      >
+        {visibleGrid.map((date) => (
           <Cell
             key={date}
             date={date}
