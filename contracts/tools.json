@@ -1,0 +1,814 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "name": "daygrid_get_context",
+      "description": "Get explicit calendar date, timezone, generation and supported limits.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object"
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "daygrid_list_items",
+      "description": "List authorized items within an inclusive date range, at most 366 days.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "from_date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "blue",
+              "sage",
+              "amber",
+              "rose",
+              "violet",
+              "gray"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "done"
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object"
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "daygrid_get_item",
+      "description": "Get one active item by UUID.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "item_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object"
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "daygrid_create_item",
+      "description": "Create one dated item in the authorized local calendar. Date must be explicit.",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "date",
+          "title"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "blue",
+              "sage",
+              "amber",
+              "rose",
+              "violet",
+              "gray"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "operation_id",
+              "replayed",
+              "change_sequence",
+              "data"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "item"
+                ],
+                "properties": {
+                  "item": {
+                    "title": "Daygrid calendar item",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "date",
+                      "title",
+                      "notes",
+                      "color",
+                      "status",
+                      "revision",
+                      "created_at",
+                      "updated_at"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "date": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "notes": {
+                        "type": "string",
+                        "maxLength": 10000
+                      },
+                      "color": {
+                        "type": "string",
+                        "enum": [
+                          "blue",
+                          "sage",
+                          "amber",
+                          "rose",
+                          "violet",
+                          "gray"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "planned",
+                          "done"
+                        ]
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updated_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  },
+                  "changed": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "daygrid_update_item",
+      "description": "Update selected fields using the current generation and item revision.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "patch": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 10000
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "blue",
+                  "sage",
+                  "amber",
+                  "rose",
+                  "violet",
+                  "gray"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "item_id",
+          "expected_revision",
+          "patch"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object"
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "daygrid_set_item_status",
+      "description": "Change planned or done status with revision protection.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "calendar_generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "done"
+            ]
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "calendar_generation",
+          "item_id",
+          "expected_revision",
+          "status"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object"
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

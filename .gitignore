@@ -1,0 +1,16 @@
+node_modules/
+target/
+dist/
+.DS_Store
+.env
+.env.*
+*.db
+*.db-*
+*.sqlite*
+*.key
+*.pem
+*.p12
+apps/desktop/binaries/*
+!apps/desktop/binaries/.gitkeep
+apps/desktop/gen/
+.daygrid/

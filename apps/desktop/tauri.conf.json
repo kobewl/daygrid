@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Daygrid",
+  "version": "0.1.0",
+  "identifier": "io.github.kobewl.daygrid",
+  "build": {
+    "frontendDist": "../../packages/ui/dist",
+    "devUrl": "http://127.0.0.1:5175",
+    "beforeDevCommand": "pnpm --filter @daygrid/ui dev",
+    "beforeBuildCommand": "pnpm --filter @daygrid/ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "日格 Daygrid",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "externalBin": ["binaries/daygrid-service", "binaries/daygrid-mcp"],
+    "category": "Productivity",
+    "shortDescription": "本地日历，按日期记事，支持 MCP",
+    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

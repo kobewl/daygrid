@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Only the Daygrid main window can invoke calendar commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

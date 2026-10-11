@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:daygrid:item:1",
+  "title": "Daygrid calendar item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "date",
+    "title",
+    "notes",
+    "color",
+    "status",
+    "revision",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 10000
+    },
+    "color": {
+      "type": "string",
+      "enum": [
+        "blue",
+        "sage",
+        "amber",
+        "rose",
+        "violet",
+        "gray"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "done"
+      ]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

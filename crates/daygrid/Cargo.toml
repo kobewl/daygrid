@@ -1,0 +1,24 @@
+[package]
+name = "daygrid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+fs2 = "0.4"
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "client", "transport-io", "transport-child-process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process"] }
+
+[dev-dependencies]
+tempfile = "3"
