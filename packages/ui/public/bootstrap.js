@@ -1,7 +1,7 @@
 // Keep early module/resource failures visible even before React mounts.
 function showStartupError(message) {
   const root = document.getElementById("root");
-  if (!root || root.querySelector(".app")) return;
+  if (!root || root.querySelector(".app, .splash")) return;
   root.textContent = "日格界面加载失败：" + message;
   root.style.cssText = "padding:32px;font:14px -apple-system,sans-serif;white-space:pre-wrap";
 }
