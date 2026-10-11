@@ -4,7 +4,7 @@ members = ["crates/daygrid", "apps/desktop"]
 default-members = ["crates/daygrid"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -12,7 +12,9 @@ repository = "https://github.com/kobewl/daygrid"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order：改写用户的 MCP 配置时保持其他条目的原有顺序。
+# 需要稳定序列化的地方（幂等摘要）使用 store::canonical，不依赖映射的默认排序。
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [profile.release]
 strip = true

@@ -1,0 +1,180 @@
+name: Release
+
+# 什么时候发版？
+#
+# 只认语义化版本的标签（v0.2.0）。**不会**在推 main 时自动发 —— 发版应该是有意识的动作。
+#
+# 发版步骤：
+#   1. 改版本号（Cargo.toml、tauri.conf.json、三个 package.json，再 `cargo update --workspace`）
+#   2. 在 CHANGELOG.md 里写好 `## [x.y.z]` 一节（它会成为 Release 正文）
+#   3. `node scripts/check-version.mjs vX.Y.Z` 本地先过一遍
+#   4. 提交、等 CI 变绿，然后 `git tag vX.Y.Z && git push origin vX.Y.Z`
+#
+# workflow_dispatch 用于补发：某次发布因为工作流配置问题失败了，不要移动已发布的标签，
+# 修好配置后在这里填入**已存在**的标签重新构建（会覆盖同名附件、刷新说明）。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的 release 标签（用于补发）
+        required: true
+        type: string
+
+# 创建 Release、上传附件需要写权限
+permissions:
+  contents: write
+
+# 同一个标签不要并发跑两份：两个任务同时上传会互相覆盖。
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  publish:
+    name: 构建并发布
+    # macos-14 是 Apple Silicon（arm64）托管运行器；下面会再确认一次架构。
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 补发时按指定标签的源码构建，保证产物与 Release 版本一致。
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # 版本号单一真值：Cargo、Tauri、各 package.json、Cargo.lock 必须一致，
+      # 且等于标签，CHANGELOG 里有该版本的说明。漏掉任何一项都不会编译失败，
+      # 但发出去的包会「版本号对不上」，所以在花时间构建之前先挡住。
+      - name: 检查版本号与更新日志
+        run: node scripts/check-version.mjs "$TAG"
+
+      - name: 确认运行器架构
+        run: |
+          arch=$(uname -m)
+          echo "runner arch: $arch"
+          if [ "$arch" != "arm64" ]; then
+            echo "发布包按 Apple Silicon (aarch64) 命名，当前运行器是 $arch"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
+
+      - run: pnpm install --frozen-lockfile
+
+      # 「发布」比「合并」更难撤回，所以发版前再跑一遍测试与真实 MCP 联调。
+      - name: 测试
+        run: cargo test -p daygrid --locked
+
+      - name: MCP 联调
+        run: cargo run -p daygrid --locked --example mcp-smoke
+
+      # `pnpm build` = 编译 release 版本的服务与 MCP 桥接 → 构建前端 → tauri build（只出 .app）。
+      # APPLE_SIGNING_IDENTITY="-" 让 Tauri 对整个应用包做 ad-hoc 签名：没有开发者证书，
+      # 但 Apple Silicon 要求可执行文件至少有签名才能运行。这不等于公证，首次打开仍会被系统提示。
+      - name: 构建应用
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: pnpm build
+
+      # 构建成功不等于产物正确。这里直接检查真实的 .app：
+      # 三个可执行文件齐全、版本与标签一致、都是 arm64、签名完整。
+      - name: 检查应用包
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          APP="target/release/bundle/macos/Daygrid.app"
+
+          for bin in daygrid-desktop daygrid-service daygrid-mcp; do
+            test -x "$APP/Contents/MacOS/$bin" || { echo "缺少 $bin"; exit 1; }
+            arch=$(lipo -archs "$APP/Contents/MacOS/$bin")
+            [ "$arch" = "arm64" ] || { echo "$bin 架构是 $arch，期望 arm64"; exit 1; }
+          done
+
+          plist=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
+          [ "$plist" = "$VERSION" ] || { echo "Info.plist 版本 $plist 与标签 $VERSION 不一致"; exit 1; }
+
+          mcp=$("$APP/Contents/MacOS/daygrid-mcp" --version)
+          [ "$mcp" = "daygrid-mcp $VERSION" ] || { echo "daygrid-mcp 报告 '$mcp'，期望 'daygrid-mcp $VERSION'"; exit 1; }
+
+          tools=$("$APP/Contents/MacOS/daygrid-mcp" --print-tools | python3 -c "import json,sys; print(len(json.load(sys.stdin)['tools']))")
+          echo "MCP 工具数: $tools"
+          [ "$tools" -ge 1 ]
+
+          codesign --verify --deep --strict "$APP"
+          codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature"
+          echo "应用包检查通过"
+
+      # ditto 保留 macOS 的资源分支与签名，普通 zip 工具可能破坏 .app。
+      - name: 打包
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAME="Daygrid_${VERSION}_aarch64.zip"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent target/release/bundle/macos/Daygrid.app "dist/$NAME"
+          (cd dist && shasum -a 256 "$NAME" > "$NAME.sha256")
+          cat "dist/$NAME.sha256"
+
+          # 解压后的应用包签名必须依然有效（压缩没有破坏它）。
+          rm -rf /tmp/unzipped && mkdir /tmp/unzipped
+          ditto -x -k "dist/$NAME" /tmp/unzipped
+          codesign --verify --deep --strict /tmp/unzipped/Daygrid.app
+          echo "zip 解压后签名有效"
+
+      - name: 生成 Release 说明
+        run: node scripts/release-notes.mjs "$TAG" > notes.md
+
+      # 已存在则刷新（补发场景），不存在则创建。--verify-tag 保证标签确实在远端。
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAME="Daygrid_${VERSION}_aarch64.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，更新附件与说明"
+            gh release upload "$TAG" "dist/$NAME" "dist/$NAME.sha256" --clobber
+            gh release edit "$TAG" --title "Daygrid $TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" "dist/$NAME" "dist/$NAME.sha256" \
+              --title "Daygrid $TAG" --notes-file notes.md --verify-tag
+          fi
+
+      # 最后一步：从线上读回附件清单，缺任何一个都让工作流失败，发版的人立刻知道。
+      - name: 确认附件齐全
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NAMES=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "$NAMES"
+          for want in "Daygrid_${VERSION}_aarch64.zip" "Daygrid_${VERSION}_aarch64.zip.sha256"; do
+            echo "$NAMES" | grep -qx "$want" || { echo "Release 缺少 $want"; exit 1; }
+          done
+          echo "Release $TAG 已发布，附件齐全"

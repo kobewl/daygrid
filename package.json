@@ -1,13 +1,14 @@
 {
   "name": "daygrid",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "dev": "pnpm prepare:sidecars && pnpm --dir apps/desktop exec tauri dev",
     "build": "pnpm prepare:sidecars --release && pnpm --dir apps/desktop exec tauri build --bundles app",
     "prepare:sidecars": "node scripts/prepare-sidecars.mjs",
-    "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && pnpm --filter @daygrid/ui build",
+    "check:version": "node scripts/check-version.mjs",
+    "check": "node scripts/check-version.mjs && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && pnpm --filter @daygrid/ui build",
     "test": "cargo test -p daygrid",
     "preview": "pnpm --filter @daygrid/ui dev",
     "test:mcp": "cargo build -p daygrid --bins && cargo run -p daygrid --example mcp-smoke",
