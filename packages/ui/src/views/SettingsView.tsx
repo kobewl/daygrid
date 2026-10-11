@@ -8,6 +8,8 @@ import {
 } from "../api";
 import { Icon } from "../components/icons";
 import { Segmented } from "../components/Segmented";
+import { SoftwareUpdate } from "../components/SoftwareUpdate";
+import type { Updater } from "../hooks/useUpdater";
 import { useNotify } from "../hooks/useToasts";
 import { relativeTime, type WeekStart } from "../lib/dates";
 import type { Prefs, Theme } from "../lib/prefs";
@@ -34,10 +36,12 @@ function Row({
 }
 
 export function SettingsView({
+  updater,
   prefs,
   onPrefs,
   changeSequence,
 }: {
+  updater: Updater;
   prefs: Prefs;
   onPrefs: (patch: Partial<Prefs>) => void;
   changeSequence: number;
@@ -100,6 +104,8 @@ export function SettingsView({
           <p className="muted">外观与周起始日只保存在这台电脑上；权限设置控制 MCP 客户端如何访问日历。</p>
         </div>
       </header>
+
+      <SoftwareUpdate updater={updater} />
 
       <section className="card">
         <h2>外观</h2>

@@ -4,9 +4,9 @@ members = ["crates/daygrid", "apps/desktop"]
 default-members = ["crates/daygrid"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 license = "MIT"
 repository = "https://github.com/kobewl/daygrid"
 

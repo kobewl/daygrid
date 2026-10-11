@@ -960,3 +960,17 @@ details[open] > summary::before { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* 软件更新 */
+.update-heading { display: flex; align-items: center; gap: 14px; }
+.update-heading h2 { margin-bottom: 4px; }
+.update-symbol { width: 44px; height: 44px; display: grid; place-items: center; flex: none; border-radius: 12px; color: var(--accent); background: var(--accent-soft); }
+.update-heading > .btn { flex: none; }
+.update-progress { height: 5px; background: var(--hover); border-radius: 5px; overflow: hidden; }
+.update-progress span { height: 100%; display: block; background: var(--accent); transition: width 0.2s; }
+.update-progress.indeterminate span { width: 35%; animation: update-progress 1.3s ease-in-out infinite alternate; }
+@keyframes update-progress { from { transform: translateX(0); } to { transform: translateX(185%); } }
+.update-bytes { margin-top: 6px; }
+.update-notes summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.update-notes pre { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.7; max-height: 220px; overflow: auto; padding: 12px; border-radius: 8px; background: var(--surface-2); }
+.update-release { align-self: flex-start; font-size: 12px; }

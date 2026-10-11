@@ -9,6 +9,7 @@ import { useActions } from "./hooks/useActions";
 import { useCalendar } from "./hooks/useCalendar";
 import { ToastProvider } from "./hooks/useToasts";
 import { usePrefs } from "./lib/prefs";
+import { useUpdater } from "./hooks/useUpdater";
 import { AssistantsView } from "./views/AssistantsView";
 import { CalendarView } from "./views/CalendarView";
 import { HistoryView } from "./views/HistoryView";
@@ -23,6 +24,7 @@ const VIEW_KEYS: Record<string, ViewId> = {
 };
 
 function Shell() {
+  const updater = useUpdater();
   const [prefs, updatePrefs] = usePrefs();
   const cal = useCalendar(prefs.weekStart);
   const actions = useActions(cal);
@@ -244,6 +246,7 @@ function Shell() {
           )}
           {view === "settings" && (
             <SettingsView
+              updater={updater}
               prefs={prefs}
               onPrefs={updatePrefs}
               changeSequence={cal.pulse?.change_sequence ?? 0}

@@ -42,6 +42,9 @@ jobs:
       - run: pnpm prepare:sidecars
       - run: pnpm --filter @daygrid/ui build
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test -p daygrid --locked
+      - run: cargo test --workspace --locked
       - run: cargo run -p daygrid --locked --example mcp-smoke
-      - run: pnpm build
+      # 普通 CI 不读取发布密钥；只验证应用能构建。
+      - name: 构建应用（不生成更新签名）
+        run: |
+          pnpm build --config '{"bundle":{"createUpdaterArtifacts":false}}'

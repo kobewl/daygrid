@@ -26,3 +26,5 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 
 [dev-dependencies]
 tempfile = "3"
+base64 = "0.22"
+minisign-verify = "0.3"

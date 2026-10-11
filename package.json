@@ -1,6 +1,6 @@
 {
   "name": "daygrid",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "packageManager": "pnpm@10.33.2",
   "scripts": {
@@ -9,7 +9,7 @@
     "prepare:sidecars": "node scripts/prepare-sidecars.mjs",
     "check:version": "node scripts/check-version.mjs",
     "check": "node scripts/check-version.mjs && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && pnpm --filter @daygrid/ui build",
-    "test": "cargo test -p daygrid",
+    "test": "pnpm prepare:sidecars && cargo test --workspace --locked",
     "preview": "pnpm --filter @daygrid/ui dev",
     "test:mcp": "cargo build -p daygrid --bins && cargo run -p daygrid --example mcp-smoke",
     "format": "cargo fmt --all && prettier --write 'packages/ui/**/*.{ts,tsx,css,json,html}' 'scripts/*.mjs' 'apps/desktop/*.json' 'apps/desktop/capabilities/*.json' '*.{json,yaml,md}' 'docs/*.md' '.github/workflows/*.yml'"

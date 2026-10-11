@@ -2,7 +2,7 @@
 
 **把每一天，安排清楚。** 日格是一款本地个人桌面日历：点击日期记事，为新事项自动配色，也能让外部客户端通过 MCP 读取并管理同一份日历。无需账号、云服务或模型密钥。
 
-当前版本 **0.2.1**（开发预览）。变更见 [CHANGELOG](CHANGELOG.md)。
+当前版本 **0.2.2**（开发预览）。变更见 [CHANGELOG](CHANGELOG.md)。
 
 ![设计参考](design/preview.png)
 
@@ -29,7 +29,7 @@
 - 每天首次启动自动备份、升级前自动备份、手动备份；设置页诊断与一键打开数据 / 日志 / 备份目录。
 - 日志按天轮转保留 7 天，只记录操作类型、耗时与错误码，**不写入任何事项标题或备注**。
 
-尚未实现：批量确认与事务、MCP 恢复与历史查询、备份恢复界面、全局筛选、事件订阅、时区设置、Apple 签名与公证、应用内自动更新。完整 VoiceOver 与 10000 条数据的 UI 层性能验收尚未完成。
+尚未实现：批量确认与事务、MCP 恢复与历史查询、备份恢复界面、全局筛选、事件订阅、时区设置、Apple 签名与公证。完整 VoiceOver 与 10000 条数据的 UI 层性能验收尚未完成。
 
 ## 安装
 
@@ -37,9 +37,11 @@
 
 这是**没有 Apple 开发者签名与公证**的个人发布包（仅 ad-hoc 签名），首次打开可能被 macOS 拦住，需要在系统设置里允许；具体入口随 macOS 版本不同，请以你系统里的界面为准。可用同名 `.sha256` 文件校验：`shasum -a 256 -c Daygrid_x.y.z_aarch64.zip.sha256`。
 
+安装 0.2.2 后，在「设置 → 软件更新」里检查版本，发现新版时点「立即更新」。更新前自动备份，更新包验签后安装并重启；数据与 MCP 连接保留。0.2.0 / 0.2.1 没有这个入口，需要先手动安装一次。
+
 ## 本地运行
 
-桌面构建目前验证于 **macOS Apple Silicon，macOS 13+**。需要 Xcode Command Line Tools、稳定版 Rust、Node.js 20.19+ 或 22+、pnpm 10.33.2。
+桌面构建目前验证于 **macOS Apple Silicon，macOS 13+**。需要 Xcode Command Line Tools、Rust 1.90+、Node.js 20.19+ 或 22+、pnpm 10.33.2。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -50,7 +52,7 @@ pnpm dev
 
 ```sh
 # 构建 macOS 应用（ad-hoc 签名）
-APPLE_SIGNING_IDENTITY="-" pnpm build
+APPLE_SIGNING_IDENTITY="-" pnpm build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 open target/release/bundle/macos/Daygrid.app
 
 # 仅看浏览器界面预览（示例数据，刷新后清空）
@@ -119,7 +121,9 @@ node scripts/check-version.mjs   # 版本号单一真值检查
 2. `node scripts/check-version.mjs vX.Y.Z` 本地先检查。
 3. 提交并等 CI 变绿后：`git tag vX.Y.Z && git push origin vX.Y.Z`。
 
-[Release 工作流](.github/workflows/release.yml)会校验版本一致、运行测试与 MCP 联调、构建应用、检查应用包（三个可执行文件、架构、版本、签名），打包 zip 与校验和，并创建 GitHub Release。
+[Release 工作流](.github/workflows/release.yml)会校验版本一致、运行测试与 MCP 联调、构建应用、检查应用包（三个可执行文件、架构、版本、签名），打包 zip 与校验和、生成签名更新包与 `latest.json`，并创建 GitHub Release。发布前与线上附件回读后均用应用内置公钥验签。
+
+发布需要仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`，对应 `tauri.conf.json` 内固定的 Daygrid 更新公钥。私钥只保存在本机受限目录与 GitHub Secret，不进入仓库。现有公钥是升级信任链，不能为修复构建随意更换；普通 CI 与本地开发构建关闭 `createUpdaterArtifacts`，不读取发布私钥。
 
 ## License
 

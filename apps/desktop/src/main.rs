@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod update;
+
 use daygrid::{Error, VERSION, clients, ipc, logging};
 use serde_json::{Value, json};
 use std::{
@@ -193,7 +195,16 @@ fn main() {
         .map(|dir| logging::init(&dir, "desktop", false));
     tracing::info!(version = VERSION, "desktop started");
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![calendar_call, app_attention])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::UpdateState::default())
+        .invoke_handler(tauri::generate_handler![
+            calendar_call,
+            app_attention,
+            update::check_update,
+            update::install_update,
+            update::restart_after_update,
+            update::open_release_page
+        ])
         .run(tauri::generate_context!())
         .expect("Daygrid desktop failed to start");
 }
