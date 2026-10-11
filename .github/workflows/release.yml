@@ -89,6 +89,9 @@ jobs:
       - name: 准备测试用服务与 MCP 桥接
         run: pnpm prepare:sidecars
 
+      - name: 准备桌面测试用界面文件
+        run: pnpm --filter @daygrid/ui build
+
       - name: 测试
         run: cargo test --workspace --locked
 
