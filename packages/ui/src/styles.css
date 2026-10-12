@@ -9,7 +9,9 @@
   --line: #e5e9e2;
   --line-strong: #d2d9ce;
   --text: #29362f;
-  --muted: #768076;
+  /* 实测对比度：旧值 #768076 在 --bg 上只有 3.78:1，低于 WCAG AA 的 4.5:1；
+     现值在 --bg / --surface / --hover 上分别为 4.95 / 5.37 / 4.62。 */
+  --muted: #646d64;
   --brand: #426853;
   --on-brand: #ffffff;
   --accent: #426853;
@@ -18,10 +20,14 @@
   --danger-soft: #fbeceb;
   --ok: #2c7a4b;
   --ok-soft: #e6f3ea;
-  --warn: #a96a0f;
+  --warn: #9a600e; /* 旧值 #a96a0f 在 --warn-soft 上 3.94:1，现 4.62:1 */
   --warn-soft: #fbf1de;
   --info: #426853;
   --info-soft: #eaf1e7;
+  /* 动效：全局只用这两条曲线与 ≤180ms 的时长，保持克制。
+     --ease 用于进出与状态过渡；--ease-pop 仅用于「勾选」「落点」这类带一点回弹的确认反馈。 */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-pop: cubic-bezier(0.3, 1.4, 0.5, 1);
   --shadow: 0 1px 2px rgb(40 38 30 / 6%), 0 8px 24px rgb(40 38 30 / 8%);
   --shadow-lg: 0 24px 64px rgb(30 28 22 / 22%);
   --blue-bg: #eaf0f7;
@@ -29,9 +35,9 @@
   --sage-bg: #eaf1e6;
   --sage-fg: #4c7150;
   --amber-bg: #faf1df;
-  --amber-fg: #916e35;
+  --amber-fg: #886732; /* 旧值 #916e35 在 --amber-bg 上 4.17:1，现 4.64:1 */
   --rose-bg: #f6e9e7;
-  --rose-fg: #a36563;
+  --rose-fg: #915a58; /* 旧值 #a36563 在 --rose-bg 上 3.85:1，现 4.66:1 */
   --violet-bg: #f0eaf5;
   --violet-fg: #796097;
   --gray-bg: #ebeae6;
@@ -362,7 +368,9 @@ mark { background: var(--warn-soft); color: inherit; border-radius: 3px; padding
   gap: 7px;
   cursor: pointer;
   overflow: hidden;
-  transition: background 0.12s;
+  transition:
+    background 0.12s var(--ease),
+    box-shadow 0.12s var(--ease);
 }
 .cell:nth-child(7n) { border-right: 0; }
 .cell:nth-last-child(-n + 7) { border-bottom: 0; }
@@ -398,6 +406,11 @@ mark { background: var(--warn-soft); color: inherit; border-radius: 3px; padding
   font-weight: 650;
 }
 .count { font-size: 11px; color: var(--muted); }
+/* 紧凑格子里的「+N」：做成小胶囊，一眼看出是被折叠的数量而不是当天总数。 */
+.count.compact {
+  padding: 0 6px; border-radius: 8px; line-height: 16px; font-weight: 600;
+  background: var(--hover); color: var(--muted); font-variant-numeric: tabular-nums;
+}
 .chips {
   display: flex;
   flex-direction: column;
@@ -407,11 +420,39 @@ mark { background: var(--warn-soft); color: inherit; border-radius: 3px; padding
 .chip {
   width: 100%; text-align: left; padding: 2px 7px; border-radius: 5px; font-size: 11px; line-height: 18px; background: var(--c-bg); color: var(--c-fg); border-left: 2px solid var(--c-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: grab; font-weight: 500; flex: none;
 }
+.chip {
+  transition:
+    opacity 0.12s var(--ease),
+    transform 0.12s var(--ease),
+    filter 0.12s var(--ease);
+}
 .chip:hover { filter: brightness(0.96); }
 .chip:active { cursor: grabbing; }
 .chip.done { opacity: 0.55; text-decoration: line-through; }
 .chip-title { display: block; overflow: hidden; text-overflow: ellipsis; }
-.more { font-size: 11px; line-height: 16px; color: var(--muted); padding-left: 7px; flex: none; }
+/* 拖拽中：原位置的事项条变淡变小，让人看清「它被拿起来了」，落点格子由 .cell.drop 高亮。 */
+.chip.dragging { opacity: 0.35; transform: scale(0.97); }
+/* 落点：放下后在新日期里轻轻「吸」一下。 */
+.chip.settle { animation: settle 0.26s var(--ease-pop); }
+@keyframes settle {
+  0% { transform: scale(0.9); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 1; }
+}
+/* 外部写入到达（助手改动、批准后执行）：出现时淡入并带一圈很快消失的光晕。 */
+.chip.arrive, .row.arrive { animation: arrive 0.7s var(--ease); }
+@keyframes arrive {
+  0% { opacity: 0; transform: translateY(-4px); box-shadow: 0 0 0 3px var(--accent-soft); }
+  50% { opacity: 1; transform: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+  100% { opacity: 1; transform: none; box-shadow: 0 0 0 0 transparent; }
+}
+.more {
+  display: block; width: 100%; text-align: left; font-size: 11px; line-height: 16px; color: var(--muted);
+  padding: 0 0 0 7px; flex: none; border-radius: 4px;
+}
+button.more:hover { color: var(--text); text-decoration: underline; }
+/* 月历切换：内容淡入并带一点方向位移（由 MonthGrid 用 Web Animations 触发），标题同理。 */
+.month-title { animation: title-in 0.14s var(--ease); }
+@keyframes title-in { from { opacity: 0.2; transform: translateY(3px); } }
 
 /* 右侧当天面板 */
 .panel {
@@ -462,17 +503,48 @@ mark { background: var(--warn-soft); color: inherit; border-radius: 3px; padding
   place-items: center;
   color: var(--surface);
   background: var(--c-bg);
+  transition:
+    background 0.15s var(--ease),
+    transform 0.15s var(--ease-pop);
+}
+.check:active { transform: scale(0.86); }
+/* 勾号常驻 DOM、靠过渡出现：状态改变时才动，切换日期重新挂载时不会误触发动画。 */
+.check svg {
+  opacity: 0;
+  transform: scale(0.4);
+  transition:
+    opacity 0.12s var(--ease),
+    transform 0.18s var(--ease-pop);
 }
 .row.done .check { background: var(--c-fg); }
+.row.done .check svg { opacity: 1; transform: scale(1); }
 .row-main { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; }
 .row-title {
+  position: relative;
+  align-self: flex-start;
+  max-width: 100%;
   font-size: 13px;
   font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.15s var(--ease);
 }
-.row.done .row-title { text-decoration: line-through; color: var(--muted); }
+/* 删除线用伪元素自左向右「划过」；text-decoration 不能做过渡。 */
+.row-title::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 52%;
+  width: 100%;
+  height: 1.5px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.18s var(--ease);
+}
+.row.done .row-title { color: var(--muted); }
+.row.done .row-title::after { transform: scaleX(1); }
 .row-sub {
   display: block;
   margin-top: 4px;
@@ -633,10 +705,30 @@ textarea { resize: vertical; min-height: 96px; line-height: 1.5; }
 
 /* ───────── 确认请求 ───────── */
 .approval-bar {
-  display: flex; flex-direction: column; gap: 10px; padding: 8px 10px 8px 14px; border-radius: var(--radius);
+  position: relative;
+  display: flex; flex-direction: column; gap: 10px; padding: 8px 10px 8px 18px; border-radius: var(--radius);
   background: var(--warn-soft); border: 1px solid var(--line-strong);
   border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  box-shadow: 0 1px 2px rgb(40 38 30 / 5%);
+  animation: bar-in 0.18s var(--ease);
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
 }
+/* 左侧强调条与事项条的「左边线」语言一致；删除类用危险色，其余用警示色。 */
+.approval-bar::before {
+  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 4px;
+  border-radius: 0 4px 4px 0; background: var(--warn);
+}
+.approval-bar.delete::before { background: var(--danger); }
+/* 不足 2 分钟：整条转危险色，倒计时轻轻脉冲。 */
+.approval-bar.urgent {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.approval-bar.urgent::before { background: var(--danger); }
+.approval-bar.urgent .approval-line > svg { color: var(--danger); }
+.approval-bar.urgent .approval-meta { color: var(--danger); font-weight: 600; animation: urgent-pulse 1.6s ease-in-out infinite; }
+@keyframes bar-in { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes urgent-pulse { 50% { opacity: 0.55; } }
 .approval-line { display: flex; align-items: center; gap: 10px; min-height: 36px; }
 .approval-line > svg { color: var(--warn); flex: none; }
 .approval-summary { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -892,15 +984,31 @@ details[open] > summary::before { transform: rotate(90deg); }
   font-size: 22px;
   letter-spacing: -0.5px;
 }
+/* 弹窗里的输入框：未聚焦时边框介于 --line 与 --line-strong 之间（旧值 --line 太淡，几乎靠占位符识别），
+   悬停加深一档，聚焦用强调色与光晕。 */
+.dialog .title-field input,
+.dialog textarea,
+.dialog input[type="date"] {
+  border-color: color-mix(in srgb, var(--line-strong) 65%, var(--line));
+}
+.dialog .title-field input:hover:not(:focus),
+.dialog textarea:hover:not(:focus),
+.dialog input[type="date"]:hover:not(:focus) {
+  border-color: var(--line-strong);
+}
+.dialog input[type="date"]:focus { border-color: var(--accent); }
 .dialog .title-field input {
   padding: 12px 13px;
   font-size: 16px;
-  border-color: var(--line);
   background: var(--surface-2);
 }
 .dialog .title-field input:focus {
   border-color: var(--accent);
 }
+/* 标题旁的配色预示：新建时显示「将自动分配的颜色」，编辑时显示「保留的原色」。 */
+.title-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.color-hint { display: inline-flex; align-items: center; gap: 6px; font-style: normal; font-weight: 400; }
+.color-hint .swatch { transition: background 0.15s var(--ease); }
 .dialog .date-field {
   flex: none;
   width: 190px;
@@ -912,7 +1020,6 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .dialog textarea {
   background: var(--surface-2);
-  border-color: var(--line);
   min-height: 104px;
   font-size: 13px;
 }

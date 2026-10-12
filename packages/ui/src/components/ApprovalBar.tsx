@@ -2,7 +2,13 @@ import { useState } from "react";
 import type { Proposal } from "../api";
 import { cx } from "../lib/util";
 import { Icon } from "./icons";
-import { KIND, ProposalBody, expiryText, useNow } from "./ProposalCard";
+import {
+  KIND,
+  ProposalBody,
+  URGENT_MS,
+  expiryText,
+  useNow,
+} from "./ProposalCard";
 
 /**
  * 有助手请求待确认时，在页面顶部显示最早的一条（一行），可直接批准或拒绝；
@@ -21,10 +27,12 @@ export function ApprovalBar({
 }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
-  const now = useNow();
-  if (!pending.length) return null;
   // 列表里 pending 按新到旧排，最早提交的在最后，先处理它。
-  const first = pending[pending.length - 1];
+  const first = pending.length ? pending[pending.length - 1] : undefined;
+  // 最后 2 分钟每秒刷新一次以显示秒数；平时 15 秒一次，不增加常态开销。
+  const urgent = first ? Date.parse(first.expires_at) - Date.now() <= URGENT_MS : false;
+  const now = useNow(urgent ? 1000 : 15000);
+  if (!first) return null;
   const kind = KIND[first.preview?.kind] ?? { label: "操作", tone: "info" };
   const decide = async (decision: "approve" | "reject") => {
     setBusy(true);
@@ -36,7 +44,15 @@ export function ApprovalBar({
     }
   };
   return (
-    <section className="approval-bar" aria-label="待确认的助手请求" role="region">
+    <section
+      className={cx(
+        "approval-bar",
+        first.preview?.kind === "delete" && "delete",
+        urgent && "urgent",
+      )}
+      aria-label="待确认的助手请求"
+      role="region"
+    >
       <div className="approval-line">
         <Icon name="shield" size={18} />
         <span className={cx("badge", kind.tone)}>{kind.label}</span>
@@ -44,7 +60,7 @@ export function ApprovalBar({
           {first.summary}
         </strong>
         <span className="muted approval-meta">
-          {first.connection_label ?? "助手"} 请求 · {expiryText(first, now)}
+          {first.connection_label ?? "助手"} 请求 · {expiryText(first, now, urgent)}
         </span>
         <button className="link" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
           {open ? "收起" : "详情"}

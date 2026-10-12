@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Item } from "../api";
 import {
   MAX_DATE,
@@ -16,13 +16,21 @@ type CellProps = {
   selected: boolean;
   dropping: boolean;
   items: Item[] | undefined;
+  /** 正在被拖拽的事项（用于让原位置变淡）。 */
+  dragId: string | undefined;
+  /** 刚放下的事项（用于落点动效）。 */
+  settledId: string | undefined;
+  /** 刚由外部写入到达的事项（用于到达动效）。 */
+  fresh: ReadonlySet<string>;
   /** 能放下几条（含/不含「还有 N 项」那一行）。 */
   cap: number;
   capAll: number;
+  /** 格子矮到放不下「事项条 + 还有 N 项」两行：不渲染 more 行，改在表头显示「+N」。 */
+  compact: boolean;
   onSelect: (date: string) => void;
   onCreate: (date: string) => void;
   onOpen: (item: Item) => void;
-  onDragItem: (id: string | undefined) => void;
+  onDragItem: (id: string | undefined, fromDate?: string) => void;
   onDropTarget: (date: string | undefined) => void;
   onDrop: (date: string) => void;
 };
@@ -33,6 +41,7 @@ const Cell = memo(function Cell(p: CellProps) {
   const day = Number(p.date.slice(8));
   const list = p.items ?? [];
   const shown = list.length <= p.capAll ? list.length : p.cap;
+  const hidden = list.length - shown;
   const open = list.filter((i) => i.status !== "done").length;
   const label = `${Number(p.date.slice(5, 7))}月${day}日，${
     list.length ? `${list.length} 项，${open} 项未完成` : "没有事项"
@@ -72,9 +81,15 @@ const Cell = memo(function Cell(p: CellProps) {
         </span>
         {list.length > 0 && (
           <span className="dots" aria-hidden="true">
-            {list.length > shown && (
-              <span className="count">{list.length}</span>
-            )}
+            {hidden > 0 &&
+              (p.compact ? (
+                // 紧凑格子里没有「还有 N 项」那一行，直接标出被折叠的数量。
+                <span className="count compact" title={`还有 ${hidden} 项未显示`}>
+                  +{hidden}
+                </span>
+              ) : (
+                <span className="count">{list.length}</span>
+              ))}
           </span>
         )}
       </div>
@@ -86,6 +101,9 @@ const Cell = memo(function Cell(p: CellProps) {
               "chip",
               `c-${item.color}`,
               item.status === "done" && "done",
+              p.dragId === item.id && "dragging",
+              p.settledId === item.id && "settle",
+              p.fresh.has(item.id) && "arrive",
             )}
             draggable
             title={item.title}
@@ -98,7 +116,7 @@ const Cell = memo(function Cell(p: CellProps) {
             onDragStart={(e) => {
               e.dataTransfer.effectAllowed = "move";
               e.dataTransfer.setData("text/plain", item.id);
-              p.onDragItem(item.id);
+              p.onDragItem(item.id, p.date);
             }}
             onDragEnd={() => {
               p.onDragItem(undefined);
@@ -108,8 +126,21 @@ const Cell = memo(function Cell(p: CellProps) {
             <span className="chip-title">{item.title}</span>
           </button>
         ))}
-        {list.length > shown && (
-          <span className="more">还有 {list.length - shown} 项</span>
+        {hidden > 0 && !p.compact && (
+          <button
+            type="button"
+            className="more"
+            title="在右侧查看当天全部事项"
+            aria-label={`${label.split("，")[0]}，查看全部 ${list.length} 项`}
+            onClick={(e) => {
+              // 选中这一天：右侧当天面板会列出全部事项。
+              e.stopPropagation();
+              if (!disabled) p.onSelect(p.date);
+            }}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            还有 {hidden} 项
+          </button>
         )}
       </div>
     </div>
@@ -123,6 +154,7 @@ export function MonthGrid({
   selected,
   weekStart,
   itemsByDate,
+  fresh,
   loading,
   onSelect,
   onCreate,
@@ -135,6 +167,7 @@ export function MonthGrid({
   selected: string;
   weekStart: WeekStart;
   itemsByDate: Map<string, Item[]>;
+  fresh: ReadonlySet<string>;
   loading: boolean;
   onSelect: (date: string) => void;
   onCreate: (date: string) => void;
@@ -142,7 +175,28 @@ export function MonthGrid({
   onMove: (itemId: string, date: string) => void;
 }) {
   const dragging = useRef<string>();
+  const dragFrom = useRef<string>();
+  const dragTimer = useRef<number>();
+  const settleTimer = useRef<number>();
   const [dropDate, setDropDate] = useState<string>();
+  const [dragId, setDragId] = useState<string>();
+  const [settledId, setSettledId] = useState<string>();
+  useEffect(
+    () => () => {
+      window.clearTimeout(dragTimer.current);
+      window.clearTimeout(settleTimer.current);
+    },
+    [],
+  );
+  const startDrag = (id: string | undefined, fromDate?: string) => {
+    dragging.current = id;
+    dragFrom.current = id ? fromDate : undefined;
+    window.clearTimeout(dragTimer.current);
+    if (id) {
+      // 拖拽图像在 dragstart 返回后才截取；同步改样式会让「被拖着走的那个」也变淡，所以延后一拍。
+      dragTimer.current = window.setTimeout(() => setDragId(id), 0);
+    } else setDragId(undefined);
+  };
   // 只展示包含当月日期的周，避免多出一整行下月的空格。
   let visibleLength = grid.length;
   while (
@@ -161,18 +215,43 @@ export function MonthGrid({
   const rows = visibleGrid.length / 7;
   // 按实际高度决定显示条数：头部与留白约 44px，每条含间距 26px。
   const cellsRef = useRef<HTMLDivElement>(null);
-  const [cap, setCap] = useState({ cap: 2, capAll: 3 });
+  // 翻月：按方向让内容淡入并带一点位移。用 Web Animations 而不是重新挂载，
+  // 否则 ResizeObserver 绑定的节点会被替换。「减少动态效果」时不播放。
+  const prevMonth = useRef(month);
+  useLayoutEffect(() => {
+    const before = prevMonth.current;
+    prevMonth.current = month;
+    const node = cellsRef.current;
+    if (!node || before === month || typeof node.animate !== "function") return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const direction = month > before ? 1 : -1; // "YYYY-MM" 字符串可直接比较先后
+    node.animate(
+      [
+        { opacity: 0.35, transform: `translateX(${direction * 14}px)` },
+        { opacity: 1, transform: "translateX(0)" },
+      ],
+      { duration: 140, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+  }, [month]);
+  const [cap, setCap] = useState({ cap: 2, capAll: 3, compact: false });
   useEffect(() => {
     const node = cellsRef.current;
     if (!node) return;
     const measure = () => {
       const row = node.clientHeight / rows;
+      // 留给「事项条 + 还有 N 项」的空间不足一条：进入紧凑模式（cap 仍至少 1 条）。
+      const withMore = Math.floor((row - 44 - 18) / 26);
       const next = {
-        cap: Math.max(1, Math.min(6, Math.floor((row - 44 - 18) / 26))),
+        cap: Math.max(1, Math.min(6, withMore)),
         capAll: Math.max(1, Math.min(6, Math.floor((row - 44) / 26))),
+        compact: withMore < 1,
       };
       setCap((old) =>
-        old.cap === next.cap && old.capAll === next.capAll ? old : next,
+        old.cap === next.cap &&
+        old.capAll === next.capAll &&
+        old.compact === next.compact
+          ? old
+          : next,
       );
     };
     measure();
@@ -212,18 +291,33 @@ export function MonthGrid({
             selected={date === selected}
             dropping={date === dropDate}
             items={itemsByDate.get(date)}
+            dragId={dragId}
+            settledId={settledId}
+            fresh={fresh}
             cap={cap.cap}
             capAll={cap.capAll}
+            compact={cap.compact}
             onSelect={onSelect}
             onCreate={onCreate}
             onOpen={onOpen}
-            onDragItem={(id) => (dragging.current = id)}
+            onDragItem={startDrag}
             onDropTarget={setDropDate}
             onDrop={(target) => {
               const id = dragging.current;
-              dragging.current = undefined;
+              const from = dragFrom.current;
+              startDrag(undefined);
               setDropDate(undefined);
-              if (id) onMove(id, target);
+              if (!id) return;
+              onMove(id, target);
+              if (from !== target) {
+                // 放到别的日期：新位置的事项条轻轻「吸」一下。
+                setSettledId(id);
+                window.clearTimeout(settleTimer.current);
+                settleTimer.current = window.setTimeout(
+                  () => setSettledId(undefined),
+                  400,
+                );
+              }
             }}
           />
         ))}

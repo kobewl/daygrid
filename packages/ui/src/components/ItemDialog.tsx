@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { ApiError, type Item } from "../api";
+import { ApiError, colorName, type Item } from "../api";
 import { MAX_DATE, MIN_DATE } from "../lib/dates";
+import { automaticColor } from "../lib/itemColor";
 import { diffItems } from "../lib/labels";
 import { cx } from "../lib/util";
 import { Icon } from "./icons";
@@ -69,6 +70,10 @@ export function ItemDialog({
     draft.date !== original.date ||
     draft.color !== original.color;
   const edit = target.mode === "edit" ? target.item : undefined;
+  // 配色预示：新建时保存会按标题自动分配（见 useActions.save），编辑时保留原色。
+  // 与保存时用的是同一个函数，所以这里看到的就是保存后的颜色。
+  const hasTitle = draft.title.trim().length > 0;
+  const previewColor = edit ? draft.color : hasTitle ? automaticColor(draft.title) : "";
 
   const requestClose = () => {
     if (dirty && !confirmDiscard) setConfirmDiscard(true);
@@ -207,8 +212,23 @@ export function ItemDialog({
             </div>
           )}
 
-          <label className="field title-field">
-            <span>标题</span>
+          <label
+            className={cx("field title-field", previewColor && `c-${previewColor}`)}
+          >
+            <span className="title-label">
+              <span>标题</span>
+              <em className="color-hint">
+                {previewColor ? (
+                  <>
+                    <i className="swatch" aria-hidden="true" />
+                    {colorName(previewColor)}
+                    {edit ? " · 保留原色" : " · 自动配色"}
+                  </>
+                ) : (
+                  "颜色将按标题自动分配"
+                )}
+              </em>
+            </span>
             <input
               data-autofocus
               value={draft.title}

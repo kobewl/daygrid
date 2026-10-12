@@ -8,6 +8,7 @@ export function DayPanel({
   date,
   today,
   items,
+  fresh,
   onToggle,
   onOpen,
   onDelete,
@@ -17,6 +18,8 @@ export function DayPanel({
   date: string;
   today: string;
   items: Item[];
+  /** 刚由外部写入到达的事项（用于到达动效）。 */
+  fresh: ReadonlySet<string>;
   onToggle: (item: Item) => void;
   onOpen: (item: Item) => void;
   onDelete: (item: Item) => void;
@@ -112,7 +115,11 @@ export function DayPanel({
           {items.map((item) => (
             <li
               key={item.id}
-              className={cx("row", item.status === "done" && "done")}
+              className={cx(
+                "row",
+                item.status === "done" && "done",
+                fresh.has(item.id) && "arrive",
+              )}
             >
               <button
                 className={cx("check", `c-${item.color}`)}
@@ -121,9 +128,8 @@ export function DayPanel({
                 aria-label={`${item.status === "done" ? "取消完成" : "标记完成"}：${item.title}`}
                 onClick={() => onToggle(item)}
               >
-                {item.status === "done" && (
-                  <Icon name="check" size={13} strokeWidth={2.6} />
-                )}
+                {/* 勾号常驻 DOM，由 CSS 过渡显隐，状态改变时才有动效。 */}
+                <Icon name="check" size={13} strokeWidth={2.6} />
               </button>
               <button className="row-main" onClick={() => onOpen(item)}>
                 <span className="row-title">{item.title}</span>

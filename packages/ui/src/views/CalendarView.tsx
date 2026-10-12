@@ -82,7 +82,9 @@ export function CalendarView({
         <header className="view-head">
           <div className="month-heading">
             <p className="eyebrow">{month.slice(0, 4)} 年 · 月历</p>
-            <h1 aria-label={monthTitle(month)}>{Number(month.slice(5))} 月</h1>
+            <h1 key={month} className="month-title" aria-label={monthTitle(month)}>
+              {Number(month.slice(5))} 月
+            </h1>
           </div>
           <div className="head-actions">
             <div className="btn-group" role="group" aria-label="切换月份">
@@ -125,6 +127,7 @@ export function CalendarView({
           selected={selected}
           weekStart={weekStart}
           itemsByDate={itemsByDate}
+          fresh={cal.fresh}
           loading={loading}
           onSelect={cal.setSelected}
           onCreate={onCreate}
@@ -144,6 +147,7 @@ export function CalendarView({
         date={selected}
         today={context.today}
         items={itemsByDate.get(selected) ?? []}
+        fresh={cal.fresh}
         onToggle={onToggle}
         onOpen={onEdit}
         onDelete={onRemove}

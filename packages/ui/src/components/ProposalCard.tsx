@@ -41,8 +41,19 @@ function ItemLine({ item, today }: { item: Item; today: string }) {
   );
 }
 
-export function expiryText(p: Proposal, now: number) {
-  const left = Math.max(0, Math.round((Date.parse(p.expires_at) - now) / 60000));
+/** 距过期不足这个时长时，横幅转为「紧急」样式并精确到秒。 */
+export const URGENT_MS = 2 * 60_000;
+
+/** `precise`：最后 2 分钟显示到秒（调用方需配合每秒刷新 `now`）；否则按分钟取整。 */
+export function expiryText(p: Proposal, now: number, precise = false) {
+  const ms = Date.parse(p.expires_at) - now;
+  if (precise && ms > 0 && ms <= URGENT_MS) {
+    const s = Math.ceil(ms / 1000);
+    return s >= 60
+      ? `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, "0")} 秒后过期`
+      : `${s} 秒后过期`;
+  }
+  const left = Math.max(0, Math.round(ms / 60000));
   return left <= 0 ? "即将过期" : `${left} 分钟后过期`;
 }
 

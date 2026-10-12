@@ -25,6 +25,7 @@ export type ItemPatch = Partial<ItemInput>;
 
 const PULSE_MS = 2000;
 const CONTEXT_EVERY = 30; // 每 30 次脉冲顺带刷新一次上下文（跨午夜时 today 会变）
+const FRESH_MS = 1400; // 外部写入到达的高亮保留多久（需大于 CSS 的 arrive 动画时长）
 
 const sortItems = (list: Item[]) =>
   list.sort(
@@ -76,6 +77,10 @@ export function useCalendar(weekStart: WeekStart) {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [pulse, setPulse] = useState<Pulse>();
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  // 刚由外部（助手、批准的请求）写入而到达界面的事项，用于一次性的到达动效。
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
+  const freshTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(freshTimer.current), []);
 
   const grid = useMemo(() => (month ? monthGrid(month, weekStart) : []), [month, weekStart]);
   const from = grid.length ? clampDate(grid[0]) : "";
@@ -111,11 +116,23 @@ export function useCalendar(weekStart: WeekStart) {
   }, []);
 
   const loadRange = useCallback(
-    async (rangeFrom: string, rangeTo: string) => {
+    async (rangeFrom: string, rangeTo: string, markFresh = false) => {
       const e = epoch.current;
       const fetched = await fetchRange(rangeFrom, rangeTo);
       // 请求期间发生过本地写入：这份数据可能已过时，丢弃（写入结束后会再校对）。
       if (e !== epoch.current) return false;
+      if (markFresh) {
+        // 只在「外部变更」路径标记：本地乐观写入完成后版本号与服务端一致，不会被误判。
+        const known = new Map(itemsRef.current.map((i) => [i.id, i.revision]));
+        const arrived = fetched
+          .filter((i) => known.get(i.id) !== i.revision)
+          .map((i) => i.id);
+        if (arrived.length) {
+          setFresh(new Set(arrived));
+          clearTimeout(freshTimer.current);
+          freshTimer.current = setTimeout(() => setFresh(new Set()), FRESH_MS);
+        }
+      }
       commit((prev) => [
         ...prev.filter((i) => i.date < rangeFrom || i.date > rangeTo),
         ...fetched,
@@ -136,11 +153,12 @@ export function useCalendar(weekStart: WeekStart) {
     }
   }, [loadRange]);
 
-  const refresh = useCallback(async () => {
+  /** `markFresh`：这次刷新是为了拉取外部写入的结果，变化的事项会触发到达动效。 */
+  const refresh = useCallback(async (markFresh = false) => {
     const { from: f, to: t } = rangeRef.current;
     if (!f) return;
     try {
-      await loadRange(f, t);
+      await loadRange(f, t, markFresh);
     } catch (e) {
       notify((e as Error).message, { tone: "error" });
     }
@@ -216,7 +234,7 @@ export function useCalendar(weekStart: WeekStart) {
             // 外部修改：只保留当前范围的缓存，重新校对。
             const { from: f, to: t } = rangeRef.current;
             commit((all) => all.filter((i) => i.date >= f && i.date <= t));
-            void refresh().then(prefetch);
+            void refresh(true).then(prefetch);
           }
           if (prev && (p.proposal_rev !== prev.proposal_rev || p.pending_proposals !== prev.pending_proposals)) {
             void refreshProposals();
@@ -408,7 +426,8 @@ export function useCalendar(weekStart: WeekStart) {
         decision,
       });
       epoch.current++;
-      await Promise.all([refreshProposals(), refresh()]);
+      // 批准后服务端才真正执行，结果等同于一次外部写入，让它「到达」得看得见。
+      await Promise.all([refreshProposals(), refresh(true)]);
       return r.proposal;
     },
     [refreshProposals, refresh],
@@ -441,6 +460,7 @@ export function useCalendar(weekStart: WeekStart) {
     shiftMonth,
     items,
     itemsByDate,
+    fresh,
     loading,
     proposals,
     pending,
