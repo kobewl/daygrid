@@ -1,11 +1,12 @@
 {
   "name": "@daygrid/ui",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5175 --strictPort",
-    "build": "tsc --noEmit && vite build"
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.9.1",

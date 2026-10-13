@@ -19,12 +19,13 @@ import {
   type WeekStart,
 } from "../lib/dates";
 import { useNotify } from "./useToasts";
+import { dateInTimeZone, millisecondsUntilNextDay } from "../lib/calendarClock";
 
 export type ItemInput = Pick<Item, "date" | "title" | "notes" | "color">;
 export type ItemPatch = Partial<ItemInput>;
 
 const PULSE_MS = 2000;
-const CONTEXT_EVERY = 30; // 每 30 次脉冲顺带刷新一次上下文（跨午夜时 today 会变）
+const CONTEXT_EVERY = 30; // 定期核对设置；日期边界与回到前台另外立即核对。
 const FRESH_MS = 1400; // 外部写入到达的高亮保留多久（需大于 CSS 的 arrive 动画时长）
 
 const sortItems = (list: Item[]) =>
@@ -88,6 +89,9 @@ export function useCalendar(weekStart: WeekStart) {
 
   // 异步回调里要读最新值，用 ref 避免闭包过期。
   const ctxRef = useRef<Context>();
+  const followingToday = useRef(true);
+  const navigation = useRef(0);
+  const contextRequest = useRef<Promise<Context | undefined>>();
   const itemsRef = useRef<Item[]>([]);
   const rangeRef = useRef({ from, to, month: month ?? "", weekStart });
   const epoch = useRef(0);
@@ -105,15 +109,29 @@ export function useCalendar(weekStart: WeekStart) {
     });
   }, []);
 
-  const refreshContext = useCallback(async () => {
-    try {
-      const c = await call<Context>("daygrid_get_context");
-      setContext(c);
-      return c;
-    } catch (e) {
-      return undefined;
+  const applyContext = useCallback((c: Context) => {
+    const previous = ctxRef.current;
+    ctxRef.current = c;
+    setContext(c);
+    if (previous && previous.today !== c.today && followingToday.current) {
+      setSelected(c.today);
+      setMonth(monthKey(c.today));
     }
   }, []);
+
+  const refreshContext = useCallback(() => {
+    // focus、visibilitychange 和跨日计时器可能同时到达，只保留一个请求。
+    if (contextRequest.current) return contextRequest.current;
+    const request = call<Context>("daygrid_get_context")
+      .then((c) => {
+        applyContext(c);
+        return c;
+      })
+      .catch(() => undefined)
+      .finally(() => { contextRequest.current = undefined; });
+    contextRequest.current = request;
+    return request;
+  }, [applyContext]);
 
   const loadRange = useCallback(
     async (rangeFrom: string, rangeTo: string, markFresh = false) => {
@@ -177,7 +195,7 @@ export function useCalendar(weekStart: WeekStart) {
     setFatal(undefined);
     try {
       const c = await call<Context>("daygrid_get_context");
-      setContext(c);
+      applyContext(c);
       setMonth((m) => m ?? monthKey(c.today));
       setSelected((s) => s ?? c.today);
       const p = await call<Pulse>("desktop_pulse");
@@ -186,8 +204,23 @@ export function useCalendar(weekStart: WeekStart) {
     } catch (e) {
       setFatal((e as Error).message);
     }
-  }, [refreshProposals]);
+  }, [applyContext, refreshProposals]);
   useEffect(() => void boot(), [boot]);
+
+  // 常驻前台时在日历时区的午夜核对；后台休眠后由前台事件补上。
+  useEffect(() => {
+    if (!context) return;
+    let delay: number;
+    try {
+      delay = millisecondsUntilNextDay(context.calendar_timezone);
+    } catch {
+      return; // 服务端仍是日期真值；不支持的本机时区交给定期刷新。
+    }
+    const timer = setTimeout(() => {
+      if (!document.hidden) void refreshContext();
+    }, delay + 25);
+    return () => clearTimeout(timer);
+  }, [context?.today, context?.calendar_timezone, refreshContext]);
 
   // 范围变化（翻月 / 改周起始日）时加载，并在空闲时预取相邻月份。
   useEffect(() => {
@@ -222,10 +255,21 @@ export function useCalendar(weekStart: WeekStart) {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let ticks = 0;
-    const tick = async () => {
+    let ticking = false;
+    const tick = async (refreshClock = false) => {
       if (stopped) return;
+      if (refreshClock) void refreshContext();
+      if (ticking) return;
+      ticking = true;
+      clearTimeout(timer);
       if (!document.hidden) {
         try {
+          const c = ctxRef.current;
+          let dateChanged = false;
+          try {
+            dateChanged = !!c && dateInTimeZone(c.calendar_timezone) !== c.today;
+          } catch { /* 本机时区数据不支持时仍核对服务端。 */ }
+          if (dateChanged || ++ticks % CONTEXT_EVERY === 0) await refreshContext();
           const p = await call<Pulse>("desktop_pulse");
           const prev = lastPulse.current;
           lastPulse.current = p;
@@ -243,41 +287,63 @@ export function useCalendar(weekStart: WeekStart) {
             if (!document.hasFocus()) requestAttention();
           }
           lastPending.current = p.pending_proposals;
-          if (++ticks % CONTEXT_EVERY === 0) void refreshContext();
         } catch {
           // 服务暂时不可用：保持现状，下一轮再试。
         }
       }
-      timer = setTimeout(tick, PULSE_MS);
+      ticking = false;
+      if (!stopped) timer = setTimeout(tick, PULSE_MS);
     };
     const onVisible = () => {
       if (!document.hidden) {
         clearTimeout(timer);
-        void tick();
+        void tick(true);
       }
     };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
+    window.addEventListener("pageshow", onVisible);
     timer = setTimeout(tick, PULSE_MS);
     return () => {
       stopped = true;
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
+      window.removeEventListener("pageshow", onVisible);
     };
   }, [context === undefined, commit, refresh, prefetch, refreshProposals, refreshContext]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ───────────── 导航 ─────────────
+  const selectDate = useCallback((date: string) => {
+    const d = clampDate(date);
+    navigation.current++;
+    const c = ctxRef.current;
+    try {
+      followingToday.current = !!c && d === dateInTimeZone(c.calendar_timezone);
+    } catch {
+      followingToday.current = d === c?.today;
+    }
+    setSelected(d);
+  }, []);
   const goDate = useCallback((date: string) => {
     const d = clampDate(date);
-    setSelected(d);
+    selectDate(d);
     setMonth(monthKey(d));
-  }, []);
-  const goToday = useCallback(() => {
-    if (ctxRef.current) goDate(ctxRef.current.today);
-  }, [goDate]);
+  }, [selectDate]);
+  const goToday = useCallback(async () => {
+    const intent = ++navigation.current;
+    const c = await refreshContext();
+    // 请求途中用户又选了其他日期，保留最新的手动操作。
+    if (navigation.current !== intent) return;
+    if (c) {
+      goDate(c.today);
+      followingToday.current = true;
+    } else notify("暂时无法获取今天的日期，请稍后再试。", { tone: "error" });
+  }, [refreshContext, goDate, notify]);
   const shiftMonth = useCallback(
     (delta: number) => {
+      navigation.current++;
+      followingToday.current = false;
       setSelected((s) => {
         const base = s ?? ctxRef.current?.today ?? MIN_DATE;
         const next = clampDate(addMonths(base, delta));
@@ -454,7 +520,7 @@ export function useCalendar(weekStart: WeekStart) {
     month,
     grid,
     selected,
-    setSelected,
+    setSelected: selectDate,
     goDate,
     goToday,
     shiftMonth,

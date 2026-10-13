@@ -386,7 +386,7 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
   switch (method) {
     case "daygrid_get_context":
       return {
-        today,
+        today: iso(new Date()),
         weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
         calendar_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         calendar_generation: generation,
