@@ -12,6 +12,7 @@ import { SoftwareUpdate } from "../components/SoftwareUpdate";
 import type { Updater } from "../hooks/useUpdater";
 import { useNotify } from "../hooks/useToasts";
 import { relativeTime, type WeekStart } from "../lib/dates";
+import { holidayYears } from "../lib/holidays";
 import type { Prefs, Theme } from "../lib/prefs";
 import { copyText, formatBytes, formatDuration } from "../lib/util";
 
@@ -101,7 +102,7 @@ export function SettingsView({
       <header className="view-head">
         <div>
           <h1>设置</h1>
-          <p className="muted">外观与周起始日只保存在这台电脑上；权限设置控制 MCP 客户端如何访问日历。</p>
+          <p className="muted">外观、周起始日与休息日规则只保存在这台电脑上；权限设置控制 MCP 客户端如何访问日历。</p>
         </div>
       </header>
 
@@ -129,6 +130,24 @@ export function SettingsView({
             options={[
               { value: 1, label: "周一" },
               { value: 0, label: "周日" },
+            ]}
+          />
+        </Row>
+      </section>
+
+      <section className="card">
+        <h2>休息日与调休</h2>
+        <Row
+          title="休 / 班的默认规则"
+          desc={`月历上每天都标着休或班。内置 ${holidayYears[0]}–${holidayYears[holidayYears.length - 1]} 年中国大陆放假与调休安排（国务院办公厅通知）；没有收录的年份只按周末推算。任何一天都可以在右侧面板里手动改成休息日或工作日，手动标记优先，并随数据一起备份。`}
+        >
+          <Segmented<"holidays" | "weekend">
+            label="休息日规则"
+            value={prefs.holidays ? "holidays" : "weekend"}
+            onChange={(rule) => onPrefs({ holidays: rule === "holidays" })}
+            options={[
+              { value: "holidays", label: "法定假日与调休" },
+              { value: "weekend", label: "仅周末" },
             ]}
           />
         </Row>

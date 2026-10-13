@@ -3,11 +3,11 @@ import type { Item } from "../api";
 import {
   MAX_DATE,
   MIN_DATE,
-  parseISO,
   weekdayNames,
   type WeekStart,
 } from "../lib/dates";
 import { cx } from "../lib/util";
+import { kindLabel, type DayInfo, type DayKind } from "../lib/workday";
 
 type CellProps = {
   date: string;
@@ -16,6 +16,10 @@ type CellProps = {
   selected: boolean;
   dropping: boolean;
   items: Item[] | undefined;
+  /** 这一天是休息日还是工作日；special 表示法定假日、调休补班或手动标记，月历里要突出。 */
+  kind: DayKind;
+  special: boolean;
+  dayHint: string;
   /** 正在被拖拽的事项（用于让原位置变淡）。 */
   dragId: string | undefined;
   /** 刚放下的事项（用于落点动效）。 */
@@ -45,7 +49,7 @@ const Cell = memo(function Cell(p: CellProps) {
     : list.length <= p.capAll ? list.length : p.cap;
   const hidden = list.length - shown;
   const open = list.filter((i) => i.status !== "done").length;
-  const label = `${Number(p.date.slice(5, 7))}月${day}日，${
+  const label = `${Number(p.date.slice(5, 7))}月${day}日，${kindLabel(p.kind)}，${
     list.length ? `${list.length} 项，${open} 项未完成` : "没有事项"
   }${p.date === p.today ? "，今天" : ""}`;
   return (
@@ -57,7 +61,7 @@ const Cell = memo(function Cell(p: CellProps) {
       aria-current={p.date === p.today ? "date" : undefined}
       className={cx(
         "cell",
-        [0, 6].includes(parseISO(p.date).getDay()) && "weekend",
+        p.kind === "rest" && "rest",
         other && "other",
         p.date === p.today && "today",
         p.selected && "selected",
@@ -79,9 +83,18 @@ const Cell = memo(function Cell(p: CellProps) {
       }}
     >
       <div className="cell-head">
-        <span className="num">
-          {day}
-          {day === 1 && other && <small>{Number(p.date.slice(5, 7))}月</small>}
+        <span className="num-wrap">
+          <span className="num">
+            {day}
+            {day === 1 && other && <small>{Number(p.date.slice(5, 7))}月</small>}
+          </span>
+          <span
+            className={cx("daytag", p.kind, p.special && "special")}
+            title={`${kindLabel(p.kind)} · ${p.dayHint}`}
+            aria-hidden="true"
+          >
+            {p.kind === "rest" ? "休" : "班"}
+          </span>
         </span>
         {p.date === p.today && <span className="cell-today-label" aria-hidden="true">今天</span>}
         {list.length > 0 && (
@@ -159,6 +172,7 @@ export function MonthGrid({
   selected,
   weekStart,
   itemsByDate,
+  days,
   fresh,
   loading,
   onSelect,
@@ -172,6 +186,7 @@ export function MonthGrid({
   selected: string;
   weekStart: WeekStart;
   itemsByDate: Map<string, Item[]>;
+  days: ReadonlyMap<string, DayInfo>;
   fresh: ReadonlySet<string>;
   loading: boolean;
   onSelect: (date: string) => void;
@@ -304,6 +319,9 @@ export function MonthGrid({
             selected={date === selected}
             dropping={date === dropDate}
             items={itemsByDate.get(date)}
+            kind={days.get(date)?.kind ?? "work"}
+            special={days.get(date)?.special ?? false}
+            dayHint={days.get(date)?.reason ?? ""}
             dragId={dragId}
             settledId={settledId}
             fresh={fresh}

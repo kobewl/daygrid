@@ -24,6 +24,14 @@ MCP stdio 桥接 ─┘
 
 批量计划与事务、MCP 侧恢复与历史查询工具、备份恢复界面、全局筛选、事件订阅、时区设置、Apple 签名与公证、自动更新。
 
+## 0.4.0：休息日标记与备注链接
+
+- **Schema v3**：新增 `day_marks(date, kind, updated_at)`，只存手动标记（`rest` / `work`）。`desktop_list_day_marks` 按范围读取，`desktop_set_day_mark` 写入，`kind=default` 删除；两者只对桌面通道开放，不在 MCP 工具里。迁移前用 `VACUUM INTO` 写临时文件，只读校验（`integrity_check` 为 ok、`user_version` 等于迁移前版本）、fsync 后原子改名为 `*.pre-v3.bak`；已有同名备份同样校验，无效则替换。备份失败时 `Store::open` 返回 `STORAGE_ERROR`，不执行迁移，数据库保持原版本。
+- **默认的休 / 班不入库**：周末与法定假日、调休补班由前端 `lib/workday.ts` 推算，数据在 `lib/holidays.ts`（2025–2026，出处写在文件里）。优先级：手动标记 > 法定放假 / 补班 > 周末。
+- **标记读写协调**：`lib/dayMarkCache.ts` 串行读取与保存，缓存已确认状态并叠加尚未完成的用户选择；保存失败只移除对应的乐观选择，后续选择继续生效，全部失败恢复已确认状态。
+- **备注仍是纯文本**，渲染时才解析 Markdown（`react-markdown` + `remark-gfm` + `remark-breaks`，不解析原始 HTML）。`lib/linkify.ts` 在渲染前把裸网址包成 `<...>`，让网址边界由「URL 合法 ASCII 字符」决定，避免紧挨的中文被吞进链接。
+- **链接**：只放行 `http`、`https`、`mailto`。桌面端通过 Tauri 命令 `open_external` 调用系统 `open`，Rust 端再校验一次；全局点击兜底保证任何漏网的链接都不会让 WebView 自己导航。
+
 ---
 
 以下为 0.1.0 的决策记录，仍然有效的部分保留，已被取代的描述已标注。

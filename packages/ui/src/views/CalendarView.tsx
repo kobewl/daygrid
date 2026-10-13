@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { Item } from "../api";
 import { DayPanel } from "../components/DayPanel";
 import { Icon } from "../components/icons";
@@ -12,10 +12,12 @@ import {
   type WeekStart,
 } from "../lib/dates";
 import { isTyping } from "../lib/util";
+import { dayInfo } from "../lib/workday";
 
 export function CalendarView({
   cal,
   weekStart,
+  holidays,
   keysEnabled,
   onCreate,
   onEdit,
@@ -26,6 +28,8 @@ export function CalendarView({
 }: {
   cal: Calendar;
   weekStart: WeekStart;
+  /** 休 / 班是否按法定节假日与调休推算。 */
+  holidays: boolean;
   /** 有对话框或命令面板打开时关闭方向键等快捷键。 */
   keysEnabled: boolean;
   onCreate: (date: string) => void;
@@ -37,6 +41,14 @@ export function CalendarView({
 }) {
   const { context, month, selected, grid, itemsByDate, loading } = cal;
   const { goDate, goToday, shiftMonth } = cal;
+  // 每天是休息日还是工作日：手动标记 > 法定假日与调休 > 周末。
+  const days = useMemo(
+    () =>
+      new Map(
+        cal.grid.map((date) => [date, dayInfo(date, cal.dayMarks.get(date), holidays)]),
+      ),
+    [cal.grid, cal.dayMarks, holidays],
+  );
 
   // 方向键移动选中日期；[ ] 翻月；T 回到今天；N 新建。
   useEffect(() => {
@@ -75,6 +87,13 @@ export function CalendarView({
   const atMax = month >= MAX_DATE.slice(0, 7);
   const monthItems = cal.items.filter((item) => item.date.startsWith(month));
   const completed = monthItems.filter((item) => item.status === "done").length;
+  let restDays = 0;
+  let workDays = 0;
+  for (const [date, info] of days) {
+    if (!date.startsWith(month)) continue;
+    if (info.kind === "rest") restDays++;
+    else workDays++;
+  }
 
   return (
     <div className="calendar">
@@ -154,6 +173,7 @@ export function CalendarView({
           selected={selected}
           weekStart={weekStart}
           itemsByDate={itemsByDate}
+          days={days}
           fresh={cal.fresh}
           loading={loading}
           onSelect={cal.setSelected}
@@ -167,6 +187,7 @@ export function CalendarView({
             今天
             <i className="selected-key" aria-hidden="true" />
             选中日期
+            {` · 本月 ${workDays} 个工作日 · ${restDays} 个休息日`}
           </span>
           <span>双击日期添加 · 拖动事项改期</span>
         </footer>
@@ -175,6 +196,8 @@ export function CalendarView({
         date={selected}
         today={context.today}
         items={itemsByDate.get(selected) ?? []}
+        day={days.get(selected) ?? dayInfo(selected, cal.dayMarks.get(selected), holidays)}
+        onMark={(value) => void cal.setDayMark(selected, value)}
         fresh={cal.fresh}
         onToggle={onToggle}
         onOpen={onEdit}

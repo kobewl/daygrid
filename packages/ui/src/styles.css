@@ -416,6 +416,15 @@ mark { background: var(--warn-soft); color: inherit; border-radius: 3px; padding
 @container (max-width: 95px) { .cell-today-label { display: none; } }
 .dots { margin-left: auto; }
 .count { font-size: 11px; color: var(--muted); }
+.num-wrap { display: flex; align-items: center; gap: 5px; min-width: 0; }
+/* 休 / 班：普通的周末与工作日只淡淡标注；法定假日、调休补班、手动标记用色块突出。 */
+.daytag {
+  flex: none; font-size: 10px; font-weight: 600; line-height: 14px; padding: 0 4px;
+  border-radius: 4px; color: var(--muted); user-select: none; -webkit-user-select: none;
+}
+.daytag.rest.special { color: var(--ok); background: var(--ok-soft); }
+.daytag.work.special { color: var(--warn); background: var(--warn-soft); }
+.cell.other .daytag { opacity: 0.5; }
 /* 紧凑格子里的「+N」：做成小胶囊，一眼看出是被折叠的数量而不是当天总数。 */
 .count.compact {
   padding: 0 6px; border-radius: 8px; line-height: 16px; font-weight: 600;
@@ -533,7 +542,8 @@ button.more:hover { color: var(--text); text-decoration: underline; }
 }
 .row.done .check { background: var(--c-fg); }
 .row.done .check svg { opacity: 1; transform: scale(1); }
-.row-main { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; }
+.row-main { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; cursor: pointer; }
+.row-title { text-align: left; cursor: pointer; }
 .row-title {
   position: relative;
   align-self: flex-start;
@@ -562,6 +572,7 @@ button.more:hover { color: var(--text); text-decoration: underline; }
 .row.done .row-title::after { transform: scaleX(1); }
 .row-sub {
   display: block;
+  min-width: 0;
   margin-top: 4px;
   font-size: 11px;
   color: var(--muted);
@@ -901,7 +912,7 @@ details[open] > summary::before { transform: rotate(90deg); }
   font-size: 9px;
   padding: 2px 3px;
 }
-.cell.weekend:not(.selected):not(.drop),
+.cell.rest:not(.selected):not(.drop),
 .weekdays .weekend {
   background: var(--surface-2);
 }
@@ -1109,3 +1120,68 @@ details[open] > summary::before { transform: rotate(90deg); }
 .update-notes summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 .update-notes pre { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.7; max-height: 220px; overflow: auto; padding: 12px; border-radius: 8px; background: var(--surface-2); }
 .update-release { align-self: flex-start; font-size: 12px; }
+
+/* ───────── 休息日 / 工作日 ───────── */
+.daykind {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 10px 12px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
+}
+.daykind.rest.special { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); }
+.daykind.work.special { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); }
+.daykind-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.daykind-main > div { min-width: 0; display: flex; flex-direction: column; }
+.daykind-main strong { font-size: 13px; }
+.daykind-main small { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.daykind.special .daykind-main small { color: var(--text); opacity: 0.75; }
+.daykind .daytag { font-size: 13px; line-height: 22px; padding: 0 6px; border-radius: 6px; background: var(--hover); }
+.daykind .daytag.special { background: var(--surface); }
+.daykind .segmented { display: flex; padding: 2px; }
+.daykind .segmented button { flex: 1; justify-content: center; height: 24px; padding: 0 8px; font-size: 12px; }
+
+/* ───────── Markdown 备注 ───────── */
+.md { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md table, .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 0 0 8px; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-size: 14px; font-weight: 650; line-height: 1.4; margin-top: 12px; }
+.md h1 { font-size: 16px; }
+.md h2 { font-size: 15px; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md li > ul, .md li > ol { margin: 2px 0 0; }
+.md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.2em; }
+.md input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: -1px; accent-color: var(--accent); }
+.md blockquote { padding: 2px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.md code {
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 1px 5px; border-radius: 5px; background: var(--hover);
+}
+.md pre { padding: 10px 12px; border-radius: 8px; background: var(--hover); overflow: auto; }
+.md pre code { padding: 0; background: none; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.md table { border-collapse: collapse; display: block; overflow: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 10px; }
+.md th { background: var(--surface-2); font-weight: 600; }
+.md-link {
+  color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px; cursor: pointer; border-radius: 3px;
+}
+.md-link:hover { text-decoration-color: currentColor; }
+.md-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 单行摘要：只留行内格式，超出省略。 */
+.md-inline { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: inherit; line-height: inherit; }
+.md-inline code { font-size: 0.95em; padding: 0 4px; }
+
+/* 备注：编辑 / 预览切换 */
+.notes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.notes-head > span { font-size: 12px; font-weight: 600; color: var(--muted); }
+.notes-tabs { padding: 2px; }
+.notes-tabs button { height: 22px; padding: 0 10px; font-size: 12px; }
+.notes-preview {
+  min-height: 104px; max-height: 280px; overflow: auto; padding: 10px 12px; cursor: text;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 65%, var(--line)); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.notes-preview:hover { border-color: var(--line-strong); }
+.notes-preview .muted { font-size: 13px; }
+.notes-hint { font-size: 11px; color: var(--muted); }

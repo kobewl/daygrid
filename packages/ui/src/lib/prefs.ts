@@ -2,10 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import type { WeekStart } from "./dates";
 
 export type Theme = "system" | "light" | "dark";
-export type Prefs = { theme: Theme; weekStart: WeekStart };
+export type Prefs = {
+  theme: Theme;
+  weekStart: WeekStart;
+  /** 休 / 班按中国大陆法定节假日与调休推算（关闭后只按周末推算）。 */
+  holidays: boolean;
+};
 
 const KEY = "daygrid.prefs.v1";
-const defaults: Prefs = { theme: "system", weekStart: 1 };
+const defaults: Prefs = { theme: "system", weekStart: 1, holidays: true };
 
 function load(): Prefs {
   try {
@@ -15,6 +20,7 @@ function load(): Prefs {
         ? raw.theme
         : defaults.theme,
       weekStart: raw.weekStart === 0 ? 0 : 1,
+      holidays: raw.holidays !== false,
     };
   } catch {
     return defaults;
@@ -27,7 +33,7 @@ export function applyTheme(theme: Theme) {
   else root.setAttribute("data-theme", theme);
 }
 
-/** 本机偏好（外观、周起始日）。只存在这台机器的 WebView 里。 */
+/** 本机偏好（外观、周起始日、休息日规则）。只存在这台机器的 WebView 里。 */
 export function usePrefs() {
   const [prefs, setPrefs] = useState<Prefs>(load);
   useEffect(() => applyTheme(prefs.theme), [prefs.theme]);

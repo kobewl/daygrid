@@ -118,6 +118,36 @@ function Shell() {
           cal.shiftMonth(-1);
         },
       },
+      {
+        id: "mark-rest",
+        label: "把选中的日期标为休息日",
+        keywords: "休 休息 调休 放假 rest",
+        icon: "sun",
+        run: () => {
+          setView("calendar");
+          void cal.setDayMark(selected, "rest");
+        },
+      },
+      {
+        id: "mark-work",
+        label: "把选中的日期标为工作日",
+        keywords: "班 上班 补班 调休 工作日 work",
+        icon: "calendar",
+        run: () => {
+          setView("calendar");
+          void cal.setDayMark(selected, "work");
+        },
+      },
+      {
+        id: "mark-default",
+        label: "选中日期的休 / 班恢复默认",
+        keywords: "默认 清除 调休 恢复 default",
+        icon: "calendar",
+        run: () => {
+          setView("calendar");
+          void cal.setDayMark(selected, "default");
+        },
+      },
       nav("calendar", "日历", "calendar", "⌘1"),
       nav("history", "修改记录", "history", "⌘2"),
       nav("assistants", "MCP 连接", "plug", "⌘3"),
@@ -154,6 +184,7 @@ function Shell() {
     ];
   }, [
     cal.selected,
+    cal.setDayMark,
     cal.goToday,
     cal.shiftMonth,
     createAt,
@@ -215,6 +246,7 @@ function Shell() {
             <CalendarView
               cal={cal}
               weekStart={prefs.weekStart}
+              holidays={prefs.holidays}
               keysEnabled={!overlay}
               onCreate={createAt}
               onEdit={edit}

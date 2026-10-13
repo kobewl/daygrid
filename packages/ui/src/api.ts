@@ -11,6 +11,7 @@ export type Item = {
   created_at: string;
   updated_at: string;
 };
+export type DayMark = { date: string; kind: "rest" | "work" };
 export type ApprovalMode = "deletes" | "all_writes";
 export type Context = {
   today: string;
@@ -219,6 +220,7 @@ if (preview) {
     [-1, "整理周报", "violet", "", "done"],
     [0, "去公园跑步", "sage", "带水，慢慢跑\n不要超过 5 公里"],
     [0, "安排下周计划", "blue", "把重要的事先记下来"],
+    [0, "刷两道算法题", "violet", "LC509 斐波那契数（https://leetcode.cn/problems/fibonacci-number/）；两题都已完成，再接续未完成的 LC740 删除并获得点数（https://leetcode.cn/problems/delete-and-earn/）。\n\n- [x] LC509\n- [ ] LC740\n\n**今天只做一题**，详见 [题解](https://leetcode.cn/)"],
     [0, "给家人打电话", "rose"],
     [2, "旧的周报模板", "gray", "已经被新版取代"],
     [2, "体检预约", "amber", "空腹，早上 9 点"],
@@ -235,6 +237,8 @@ if (preview) {
   );
 }
 const items: Item[] = items0;
+// 休息日 / 工作日手动标记（调休）。演示数据：国庆后的周六补班，仅存内存。
+const dayMarks = new Map<string, DayMark["kind"]>();
 const trash = new Map<string, Item>();
 const history: History[] = [];
 const demoId = key();
@@ -555,6 +559,19 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
       proposalRev++;
       return { proposal: p };
     }
+    case "desktop_list_day_marks":
+      return {
+        marks: [...dayMarks]
+          .filter(([date]) => date >= a.from_date && date <= a.to_date)
+          .sort(([x], [y]) => x.localeCompare(y))
+          .map(([date, kind]) => ({ date, kind })),
+      };
+    case "desktop_set_day_mark":
+      if (!["rest", "work", "default"].includes(a.kind))
+        fail("VALIDATION_ERROR", "日期类型需要是 rest、work 或 default。");
+      if (a.kind === "default") dayMarks.delete(a.date);
+      else dayMarks.set(a.date, a.kind);
+      return { date: a.date, kind: a.kind };
     case "desktop_get_settings":
       return { approval_mode: approvalMode };
     case "desktop_set_settings":

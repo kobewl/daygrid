@@ -16,7 +16,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 /// 助手发起的待确认请求有效期。
 pub const PROPOSAL_TTL_MINUTES: i64 = 10;
 /// 助手活动审计最多保留的条数。
@@ -74,6 +74,83 @@ fn short(text: &str) -> String {
     } else {
         head
     }
+}
+
+/// 迁移前备份失败：不迁移，数据库保持原版本。
+fn backup_failed(what: &str, e: impl std::fmt::Display) -> Error {
+    tracing::error!(error = %e, what, "pre-migration backup failed");
+    Error::new(
+        "STORAGE_ERROR",
+        "升级前无法生成数据库备份，已取消升级，数据保持不变。",
+    )
+}
+
+/// 备份文件是否完整可用：只读打开、`integrity_check` 通过、schema 版本等于迁移前版本。
+fn backup_is_valid(path: &Path, version: i64) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let check = || -> rusqlite::Result<bool> {
+        let db = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let ok: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+        let v: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        Ok(ok == "ok" && v == version)
+    };
+    match check() {
+        Ok(valid) => valid,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "backup check failed");
+            false
+        }
+    }
+}
+
+/// 生成 `<db>.pre-v{SCHEMA_VERSION}.bak`：`VACUUM INTO` 临时文件 → 校验 → fsync → 原子改名。
+/// 已有同名备份先校验，有效就沿用，无效则用新快照替换。
+fn pre_migration_backup(db: &Connection, path: &Path, version: i64) -> Result<()> {
+    let backup = PathBuf::from(format!("{}.pre-v{}.bak", path.display(), SCHEMA_VERSION));
+    if backup_is_valid(&backup, version) {
+        return Ok(());
+    }
+    let tmp = PathBuf::from(format!("{}.tmp-{}", backup.display(), Uuid::new_v4()));
+    let made = (|| -> Result<()> {
+        // VACUUM INTO 读取一致性快照（含 WAL 中尚未落盘的内容），不依赖 checkpoint。
+        db.execute("VACUUM INTO ?1", [tmp.to_string_lossy().to_string()])
+            .map_err(|e| backup_failed("vacuum into", e))?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+            .map_err(|e| backup_failed("chmod", e))?;
+        if !backup_is_valid(&tmp, version) {
+            return Err(backup_failed("verify", "snapshot failed verification"));
+        }
+        fs::File::open(&tmp)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| backup_failed("fsync", e))?;
+        fs::rename(&tmp, &backup).map_err(|e| backup_failed("rename", e))?;
+        if let Some(dir) = backup.parent() {
+            let dir = if dir.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                dir
+            };
+            fs::File::open(dir)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| backup_failed("fsync dir", e))?;
+        }
+        Ok(())
+    })();
+    if made.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    made?;
+    tracing::info!(
+        from = version,
+        to = SCHEMA_VERSION,
+        "database backed up before migration"
+    );
+    Ok(())
 }
 
 pub struct Store {
@@ -167,22 +244,9 @@ impl Store {
             ));
         }
         if (1..SCHEMA_VERSION).contains(&version) {
-            // 迁移前留一份原样拷贝：迁移失败或用户想回退到旧版本时可以直接用。
-            let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-            let backup = format!("{}.pre-v{}.bak", path.display(), SCHEMA_VERSION);
-            if !Path::new(&backup).exists() {
-                match fs::copy(path, &backup) {
-                    Ok(_) => {
-                        let _ = fs::set_permissions(&backup, fs::Permissions::from_mode(0o600));
-                        tracing::info!(
-                            from = version,
-                            to = SCHEMA_VERSION,
-                            "database backed up before migration"
-                        );
-                    }
-                    Err(e) => tracing::warn!(error = %e, "pre-migration backup failed"),
-                }
-            }
+            // 迁移前留一份经过校验的一致性快照：迁移失败或用户想回退到旧版本时可以直接用。
+            // 备份做不出来就不迁移，数据库保持原版本不动。
+            pre_migration_backup(&db, path, version)?;
         }
         db.execute_batch("BEGIN IMMEDIATE;
           CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -197,6 +261,12 @@ impl Store {
                  ALTER TABLE connections ADD COLUMN last_seen_at TEXT;
                  CREATE TABLE IF NOT EXISTS activity(sequence INTEGER PRIMARY KEY AUTOINCREMENT,occurred_at TEXT NOT NULL,connection_id TEXT NOT NULL,tool TEXT NOT NULL,outcome TEXT NOT NULL,error_code TEXT,duration_ms INTEGER NOT NULL,summary TEXT NOT NULL);
                  CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY,actor TEXT NOT NULL,idempotency_key TEXT NOT NULL,digest TEXT NOT NULL,method TEXT NOT NULL,args TEXT NOT NULL,summary TEXT NOT NULL,preview TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','approved','rejected','expired','failed')),created_at TEXT NOT NULL,expires_at TEXT NOT NULL,decided_at TEXT,outcome TEXT,UNIQUE(actor,idempotency_key));",
+            )?;
+        }
+        if version < 3 {
+            // 0.4.0：休息日 / 工作日的手动标记（只记录与默认不同的那几天；调休补班也存这里）。
+            db.execute_batch(
+                "CREATE TABLE IF NOT EXISTS day_marks(date TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('rest','work')),updated_at TEXT NOT NULL);",
             )?;
         }
         db.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"))?;
@@ -394,6 +464,8 @@ impl Store {
             "desktop_pulse" => self.pulse(),
             "desktop_diagnostics" => self.diagnostics(),
             "desktop_backup" => self.backup(),
+            "desktop_list_day_marks" => self.list_day_marks(&args),
+            "desktop_set_day_mark" => self.set_day_mark(&args),
             "desktop_get_settings" => Ok(success(json!({"approval_mode":self.approval_mode()?}))),
             "desktop_set_settings" => {
                 #[derive(Deserialize)]
@@ -654,6 +726,63 @@ impl Store {
             values.push(json!({"sequence":s,"operation_id":op,"item_id":id,"action":action,"before":before.and_then(|v|serde_json::from_str::<Value>(&v).ok()),"after":after.and_then(|v|serde_json::from_str::<Value>(&v).ok()),"actor":actor,"occurred_at":at}));
         }
         Ok(success(json!({"history":values})))
+    }
+
+    /// 读取一段日期内手动标记的休息日 / 工作日。没有记录的日子由界面按周末与法定假日推算。
+    fn list_day_marks(&self, args: &Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            from_date: String,
+            to_date: String,
+        }
+        let a: Args = domain::decode(args)?;
+        let from = domain::date(&a.from_date)?;
+        let to = domain::date(&a.to_date)?;
+        let days = (to - from).num_days() + 1;
+        if !(1..=400).contains(&days) {
+            return Err(Error::new("VALIDATION_ERROR", "标记查询范围为 1–400 天。"));
+        }
+        let mut stmt = self.db.prepare_cached(
+            "SELECT date,kind FROM day_marks WHERE date BETWEEN ?1 AND ?2 ORDER BY date",
+        )?;
+        let marks = stmt
+            .query_map(params![a.from_date, a.to_date], |r| {
+                Ok(json!({"date":r.get::<_, String>(0)?,"kind":r.get::<_, String>(1)?}))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(success(json!({"marks":marks})))
+    }
+
+    /// 把某一天标成休息日或工作日；`default` 删除标记，回到按周末与法定假日推算。
+    fn set_day_mark(&self, args: &Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            date: String,
+            kind: String,
+        }
+        let a: Args = domain::decode(args)?;
+        domain::date(&a.date)?;
+        match a.kind.as_str() {
+            "rest" | "work" => {
+                self.db.execute(
+                    "INSERT INTO day_marks(date,kind,updated_at) VALUES(?1,?2,?3) ON CONFLICT(date) DO UPDATE SET kind=excluded.kind,updated_at=excluded.updated_at",
+                    params![a.date, a.kind, stamp()],
+                )?;
+            }
+            "default" => {
+                self.db
+                    .execute("DELETE FROM day_marks WHERE date=?1", [&a.date])?;
+            }
+            _ => {
+                return Err(Error::new(
+                    "VALIDATION_ERROR",
+                    "日期类型需要是 rest、work 或 default。",
+                ));
+            }
+        }
+        Ok(success(json!({"date":a.date,"kind":a.kind})))
     }
 
     /// 全局搜索：跨全部日期，按日期倒序，标题命中优先标注。

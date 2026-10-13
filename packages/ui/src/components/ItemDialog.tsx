@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, colorName, type Item } from "../api";
 import { MAX_DATE, MIN_DATE } from "../lib/dates";
 import { automaticColor } from "../lib/itemColor";
 import { diffItems } from "../lib/labels";
 import { cx } from "../lib/util";
 import { Icon } from "./icons";
+import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
+import { Segmented } from "./Segmented";
 
 export type Draft = {
   id?: string;
@@ -63,6 +65,22 @@ export function ItemDialog({
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<Item>();
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // 已有备注的事项先以阅读形式打开，这样里面的链接能直接点；点空白处或「编辑」再修改。
+  const [notesMode, setNotesMode] = useState<"edit" | "preview">(
+    target.mode === "edit" && target.item.notes.trim() ? "preview" : "edit",
+  );
+  const notesRef = useRef<HTMLTextAreaElement>(null);
+  const focusNotes = useRef(false);
+  useEffect(() => {
+    if (notesMode === "edit" && focusNotes.current) {
+      focusNotes.current = false;
+      notesRef.current?.focus();
+    }
+  }, [notesMode]);
+  const editNotes = () => {
+    focusNotes.current = true;
+    setNotesMode("edit");
+  };
 
   const dirty =
     draft.title !== original.title ||
@@ -253,24 +271,58 @@ export function ItemDialog({
             />
           </label>
 
-          <label className="field">
-            <span>
-              备注 <span className="optional">可选</span>
-              {len(draft.notes) > 8000 && (
-                <em
-                  className={cx("counter", len(draft.notes) > 10000 && "over")}
-                >
-                  {len(draft.notes)} / 10000
-                </em>
-              )}
-            </span>
-            <textarea
-              value={draft.notes}
-              rows={3}
-              onChange={(e) => change("notes", e.target.value)}
-              placeholder="补充细节、想法，或需要记住的事"
-            />
-          </label>
+          <div className="field">
+            <div className="notes-head">
+              <span id="notes-label">
+                备注 <span className="optional">可选 · 支持 Markdown</span>
+                {len(draft.notes) > 8000 && (
+                  <em
+                    className={cx("counter", len(draft.notes) > 10000 && "over")}
+                  >
+                    {len(draft.notes)} / 10000
+                  </em>
+                )}
+              </span>
+              <Segmented<"edit" | "preview">
+                label="备注视图"
+                className="notes-tabs"
+                value={notesMode}
+                onChange={(mode) => (mode === "edit" ? editNotes() : setNotesMode(mode))}
+                options={[
+                  { value: "edit", label: "编辑" },
+                  { value: "preview", label: "预览" },
+                ]}
+              />
+            </div>
+            {notesMode === "edit" ? (
+              <textarea
+                ref={notesRef}
+                aria-labelledby="notes-label"
+                value={draft.notes}
+                rows={3}
+                onChange={(e) => change("notes", e.target.value)}
+                placeholder="补充细节、想法，或需要记住的事。支持 Markdown：**加粗**、- 列表、[文字](链接)，网址会自动变成可点击的链接"
+              />
+            ) : (
+              <div
+                className="notes-preview"
+                role="group"
+                aria-labelledby="notes-label"
+                onClick={(e) => {
+                  // 点链接是打开网址；点其他地方回到编辑。选中文字（复制）时不打断。
+                  if ((e.target as Element).closest("a")) return;
+                  if (window.getSelection()?.toString()) return;
+                  editNotes();
+                }}
+              >
+                {draft.notes.trim() ? (
+                  <Markdown source={draft.notes} />
+                ) : (
+                  <p className="muted">没有备注，点这里开始写</p>
+                )}
+              </div>
+            )}
+          </div>
 
           {error && (
             <p className="form-error" role="alert">

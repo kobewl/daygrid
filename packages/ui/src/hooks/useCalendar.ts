@@ -18,6 +18,7 @@ import {
   monthKey,
   type WeekStart,
 } from "../lib/dates";
+import { useDayMarks } from "./useDayMarks";
 import { useNotify } from "./useToasts";
 import { dateInTimeZone, millisecondsUntilNextDay } from "../lib/calendarClock";
 
@@ -86,6 +87,7 @@ export function useCalendar(weekStart: WeekStart) {
   const grid = useMemo(() => (month ? monthGrid(month, weekStart) : []), [month, weekStart]);
   const from = grid.length ? clampDate(grid[0]) : "";
   const to = grid.length ? clampDate(grid[grid.length - 1]) : "";
+  const { dayMarks, setDayMark } = useDayMarks(from, to);
 
   // 异步回调里要读最新值，用 ref 避免闭包过期。
   const ctxRef = useRef<Context>();
@@ -540,6 +542,8 @@ export function useCalendar(weekStart: WeekStart) {
     removeItem,
     restoreItem,
     decide,
+    dayMarks,
+    setDayMark,
   };
 }
 export type Calendar = ReturnType<typeof useCalendar>;

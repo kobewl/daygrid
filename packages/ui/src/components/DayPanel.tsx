@@ -2,13 +2,18 @@ import { useState } from "react";
 import type { Item } from "../api";
 import { addDays, dayTitle, weekdayLong } from "../lib/dates";
 import { cx } from "../lib/util";
+import { kindLabel, type DayInfo, type MarkValue } from "../lib/workday";
 import { Icon } from "./icons";
+import { firstNoteLine, Markdown } from "./Markdown";
+import { Segmented } from "./Segmented";
 
 export function DayPanel({
   date,
   today,
   items,
+  day,
   fresh,
+  onMark,
   onToggle,
   onOpen,
   onDelete,
@@ -18,6 +23,10 @@ export function DayPanel({
   date: string;
   today: string;
   items: Item[];
+  /** 这一天是休息日还是工作日，以及原因。 */
+  day: DayInfo;
+  /** 手动标记这一天；default 清除标记。 */
+  onMark: (value: MarkValue) => void;
   /** 刚由外部写入到达的事项（用于到达动效）。 */
   fresh: ReadonlySet<string>;
   onToggle: (item: Item) => void;
@@ -71,6 +80,30 @@ export function DayPanel({
           <Icon name="plus" />
         </button>
       </header>
+      <section
+        className={cx("daykind", day.kind, day.special && "special")}
+        aria-label="这一天是休息日还是工作日"
+      >
+        <div className="daykind-main">
+          <span className={cx("daytag", day.kind, day.special && "special")} aria-hidden="true">
+            {day.kind === "rest" ? "休" : "班"}
+          </span>
+          <div>
+            <strong>{kindLabel(day.kind)}</strong>
+            <small>{day.reason}</small>
+          </div>
+        </div>
+        <Segmented<MarkValue>
+          label="标记这一天"
+          value={day.manual ? day.kind : "default"}
+          onChange={onMark}
+          options={[
+            { value: "default", label: "默认" },
+            { value: "rest", label: "休" },
+            { value: "work", label: "班" },
+          ]}
+        />
+      </section>
       <div className="day-summary">
         <span>
           {items.length ? `${items.length - done} 项待完成` : "每日安排"}
@@ -131,12 +164,23 @@ export function DayPanel({
                 {/* 勾号常驻 DOM，由 CSS 过渡显隐，状态改变时才有动效。 */}
                 <Icon name="check" size={13} strokeWidth={2.6} />
               </button>
-              <button className="row-main" onClick={() => onOpen(item)}>
-                <span className="row-title">{item.title}</span>
-                {item.notes && (
-                  <span className="row-sub">{item.notes.split("\n")[0]}</span>
+              {/* 整块可点开编辑；标题是键盘入口，备注摘要里的链接单独可点（在系统浏览器打开）。 */}
+              <div
+                className="row-main"
+                onClick={(e) => {
+                  if ((e.target as Element).closest("a")) return;
+                  onOpen(item);
+                }}
+              >
+                <button type="button" className="row-title">
+                  {item.title}
+                </button>
+                {firstNoteLine(item.notes) && (
+                  <div className="row-sub">
+                    <Markdown source={firstNoteLine(item.notes)} inline />
+                  </div>
                 )}
-              </button>
+              </div>
               <button
                 className="row-del"
                 onClick={() => onDelete(item)}

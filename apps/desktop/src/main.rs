@@ -27,7 +27,39 @@ fn app_attention(window: tauri::WebviewWindow) {
     let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
 }
 
-const SERVICE_METHODS: [&str; 22] = [
+/// 备注里的链接用系统默认浏览器 / 邮件客户端打开。只放行 http、https、mailto，
+/// 且必须以协议开头（不会被 `open` 当成命令行选项），不含空白与控制字符。
+fn external_url(url: &str) -> Result<&str, Error> {
+    let lower = url.to_ascii_lowercase();
+    let allowed = ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme));
+    let clean = !url.chars().any(|c| c.is_whitespace() || c.is_control());
+    if allowed && clean && url.len() <= 2048 {
+        Ok(url)
+    } else {
+        Err(Error::new(
+            "VALIDATION_ERROR",
+            "只能打开 http、https 或 mailto 链接。",
+        ))
+    }
+}
+
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let url = external_url(&url).map_err(|e| e.message)?;
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(not(target_os = "macos"))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "无法打开该链接。".to_string())
+}
+
+const SERVICE_METHODS: [&str; 24] = [
     "daygrid_get_context",
     "daygrid_list_items",
     "daygrid_get_item",
@@ -50,6 +82,8 @@ const SERVICE_METHODS: [&str; 22] = [
     "desktop_backup",
     "desktop_get_settings",
     "desktop_set_settings",
+    "desktop_list_day_marks",
+    "desktop_set_day_mark",
 ];
 
 fn dispatch(method: &str, args: Value) -> Value {
@@ -200,6 +234,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             calendar_call,
             app_attention,
+            open_external,
             update::check_update,
             update::install_update,
             update::restart_after_update,
@@ -207,4 +242,35 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("Daygrid desktop failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::external_url;
+
+    #[test]
+    fn only_web_and_mail_links_are_opened() {
+        for ok in [
+            "https://leetcode.cn/problems/fibonacci-number/",
+            "http://example.com/a?b=1&c=%E4%B8%AD#x",
+            "HTTPS://EXAMPLE.COM",
+            "mailto:me@example.com",
+        ] {
+            assert_eq!(external_url(ok).unwrap(), ok);
+        }
+        for bad in [
+            "",
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "-a Calculator",
+            "/Applications/Calculator.app",
+            "https://a.com/ b",
+            "https://a.com/\n",
+            "ftp://example.com",
+            "tel:123",
+        ] {
+            assert!(external_url(bad).is_err(), "{bad:?}");
+        }
+        assert!(external_url(&format!("https://a.com/{}", "a".repeat(2100))).is_err());
+    }
 }

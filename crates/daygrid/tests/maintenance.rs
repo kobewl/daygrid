@@ -1,7 +1,7 @@
 //! 迁移、备份、诊断、契约漂移与性能基线。
 use daygrid::{store::Store, tools};
 use serde_json::{Value, json};
-use std::{fs, time::Instant};
+use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
 
 fn call(store: &mut Store, method: &str, args: Value) -> Value {
     store.call("desktop", "secret", method, args)
@@ -45,15 +45,137 @@ fn migrates_v1_database_and_keeps_a_copy() {
     assert!(conns["data"]["connections"][0]["last_seen_at"].is_null());
     assert_eq!(
         call(&mut store, "desktop_diagnostics", json!({}))["data"]["schema_version"],
-        2
+        3
     );
     assert!(
-        dir.path().join("calendar.db.pre-v2.bak").exists(),
+        dir.path().join("calendar.db.pre-v3.bak").exists(),
         "迁移前应保留原样拷贝"
     );
     drop(store);
     // 再次打开是无操作，不会重复迁移或报错。
     assert!(Store::open(&path, "secret").is_ok());
+}
+
+/// 建一个 v2（0.3.x）库，并写入一条迁移前标记。返回的连接保持打开，
+/// 让标记留在 WAL 里，用来确认备份不依赖 checkpoint。
+fn v2_database(path: &std::path::Path) -> rusqlite::Connection {
+    drop(Store::open(path, "secret").unwrap());
+    let db = rusqlite::Connection::open(path).unwrap();
+    db.execute_batch(
+        "DROP TABLE day_marks; PRAGMA user_version=2;
+         INSERT INTO metadata VALUES('marker','before-v3');",
+    )
+    .unwrap();
+    db
+}
+
+fn schema_version(path: &std::path::Path) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// 只读打开备份，确认完整、停在 v2 且带着迁移前数据。
+fn assert_valid_v2_backup(path: &std::path::Path) {
+    let db =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let ok: String = db
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ok, "ok");
+    let v: i64 = db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(v, 2, "备份应是迁移前的版本");
+    let marker: String = db
+        .query_row("SELECT value FROM metadata WHERE key='marker'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(marker, "before-v3");
+    let marks: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='day_marks'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(marks, 0, "备份里不应有 v3 的表");
+}
+
+fn leftover_temp_files(dir: &std::path::Path) -> Vec<String> {
+    fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains(".tmp-"))
+        .collect()
+}
+
+#[test]
+fn pre_v3_backup_is_verified_and_holds_pre_migration_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calendar.db");
+    let holder = v2_database(&path);
+    let store = Store::open(&path, "secret").unwrap();
+    drop(store);
+    drop(holder);
+    assert_eq!(schema_version(&path), 3);
+    let backup = dir.path().join("calendar.db.pre-v3.bak");
+    assert_valid_v2_backup(&backup);
+    assert_eq!(
+        fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(leftover_temp_files(dir.path()).is_empty());
+}
+
+#[test]
+fn invalid_existing_pre_v3_backup_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calendar.db");
+    let backup = dir.path().join("calendar.db.pre-v3.bak");
+    let holder = v2_database(&path);
+    fs::write(&backup, b"not a database").unwrap();
+    drop(Store::open(&path, "secret").unwrap());
+    drop(holder);
+    assert_eq!(schema_version(&path), 3);
+    assert_valid_v2_backup(&backup);
+    assert!(leftover_temp_files(dir.path()).is_empty());
+}
+
+#[test]
+fn failed_pre_v3_backup_aborts_the_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calendar.db");
+    let backup = dir.path().join("calendar.db.pre-v3.bak");
+    drop(v2_database(&path));
+    // 备份路径被一个非空目录占着：快照无法改名到位。
+    fs::create_dir(&backup).unwrap();
+    fs::write(backup.join("keep"), b"x").unwrap();
+    assert_eq!(
+        Store::open(&path, "secret").err().unwrap().code,
+        "STORAGE_ERROR"
+    );
+    assert_eq!(schema_version(&path), 2, "备份失败时不应升级");
+    let marks: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='day_marks'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(marks, 0);
+    assert!(leftover_temp_files(dir.path()).is_empty());
+
+    // 障碍移除后再次打开即可正常备份并升级。
+    fs::remove_dir_all(&backup).unwrap();
+    drop(Store::open(&path, "secret").unwrap());
+    assert_eq!(schema_version(&path), 3);
+    assert_valid_v2_backup(&backup);
 }
 
 #[test]
