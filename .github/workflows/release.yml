@@ -92,7 +92,10 @@ jobs:
       - name: 准备桌面测试用界面文件
         run: pnpm --filter @daygrid/ui build
 
-      - name: 测试
+      - name: 日期与跨日回归测试
+        run: pnpm --filter @daygrid/ui test
+
+      - name: Rust 测试
         run: cargo test --workspace --locked
 
       - name: MCP 联调

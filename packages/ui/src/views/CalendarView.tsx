@@ -81,10 +81,29 @@ export function CalendarView({
       <section className="calendar-main">
         <header className="view-head">
           <div className="month-heading">
-            <p className="eyebrow">{month.slice(0, 4)} 年 · 月历</p>
-            <h1 key={month} className="month-title" aria-label={monthTitle(month)}>
-              {Number(month.slice(5))} 月
+            <p className="eyebrow">
+              <span>{month.slice(0, 4)} 年</span>
+              <span className="view-label">月历</span>
+            </p>
+            <h1
+              key={month}
+              className="month-title"
+              aria-label={monthTitle(month)}
+            >
+              <span>{Number(month.slice(5))}</span>
+              <span className="month-unit">月</span>
             </h1>
+            <p className="month-overview">
+              {monthItems.length
+                ? `${monthItems.length} 项安排`
+                : "这个月，慢慢安排"}
+              {completed > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  {completed} 项已完成
+                </>
+              )}
+            </p>
           </div>
           <div className="head-actions">
             <div className="btn-group" role="group" aria-label="切换月份">
@@ -97,8 +116,16 @@ export function CalendarView({
               >
                 <Icon name="left" />
               </button>
-              <button className="btn" onClick={goToday} title="回到今天（T）">
+              <button
+                className="btn today-button"
+                onClick={goToday}
+                aria-label="回到今天"
+                title="回到今天（T）"
+              >
                 今天
+                <span className="today-button-date">
+                  {Number(context.today.slice(8))} 日
+                </span>
               </button>
               <button
                 className="btn icon-btn"
@@ -136,9 +163,10 @@ export function CalendarView({
         />
         <footer className="calendar-foot">
           <span>
-            {monthItems.length
-              ? `本月 ${monthItems.length} 项安排 · ${completed} 项已完成`
-              : "从一件小事，开始安排这个月"}
+            <i className="today-key" aria-hidden="true" />
+            今天
+            <i className="selected-key" aria-hidden="true" />
+            选中日期
           </span>
           <span>双击日期添加 · 拖动事项改期</span>
         </footer>

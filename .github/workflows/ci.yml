@@ -41,6 +41,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: pnpm prepare:sidecars
       - run: pnpm --filter @daygrid/ui build
+      - name: 日期与跨日回归测试
+        run: pnpm --filter @daygrid/ui test
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: cargo run -p daygrid --locked --example mcp-smoke

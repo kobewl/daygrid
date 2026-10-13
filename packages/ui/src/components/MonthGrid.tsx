@@ -25,7 +25,7 @@ type CellProps = {
   /** 能放下几条（含/不含「还有 N 项」那一行）。 */
   cap: number;
   capAll: number;
-  /** 格子矮到放不下「事项条 + 还有 N 项」两行：不渲染 more 行，改在表头显示「+N」。 */
+  /** 放不下事项条和更多入口时，改在表头显示折叠数量。 */
   compact: boolean;
   onSelect: (date: string) => void;
   onCreate: (date: string) => void;
@@ -40,7 +40,9 @@ const Cell = memo(function Cell(p: CellProps) {
   const other = p.date.slice(0, 7) !== p.month;
   const day = Number(p.date.slice(8));
   const list = p.items ?? [];
-  const shown = list.length <= p.capAll ? list.length : p.cap;
+  const shown = p.compact
+    ? Math.min(list.length, p.capAll)
+    : list.length <= p.capAll ? list.length : p.cap;
   const hidden = list.length - shown;
   const open = list.filter((i) => i.status !== "done").length;
   const label = `${Number(p.date.slice(5, 7))}月${day}日，${
@@ -52,6 +54,7 @@ const Cell = memo(function Cell(p: CellProps) {
       aria-selected={p.selected}
       aria-label={label}
       aria-disabled={disabled || undefined}
+      aria-current={p.date === p.today ? "date" : undefined}
       className={cx(
         "cell",
         [0, 6].includes(parseISO(p.date).getDay()) && "weekend",
@@ -77,19 +80,20 @@ const Cell = memo(function Cell(p: CellProps) {
     >
       <div className="cell-head">
         <span className="num">
-          {day === 1 ? `${Number(p.date.slice(5, 7))}月${day}日` : day}
+          {day}
+          {day === 1 && other && <small>{Number(p.date.slice(5, 7))}月</small>}
         </span>
+        {p.date === p.today && <span className="cell-today-label" aria-hidden="true">今天</span>}
         {list.length > 0 && (
           <span className="dots" aria-hidden="true">
-            {hidden > 0 &&
-              (p.compact ? (
-                // 紧凑格子里没有「还有 N 项」那一行，直接标出被折叠的数量。
-                <span className="count compact" title={`还有 ${hidden} 项未显示`}>
-                  +{hidden}
-                </span>
-              ) : (
-                <span className="count">{list.length}</span>
-              ))}
+            {hidden > 0 && p.compact ? (
+              // 紧凑格子里没有「还有 N 项」那一行，直接标出被折叠的数量。
+              <span className="count compact" title={`还有 ${hidden} 项未显示`}>
+                +{hidden}
+              </span>
+            ) : (
+              <span className="count" title={`${list.length} 项，${open} 项待完成`}>{list.length}</span>
+            )}
           </span>
         )}
       </div>
@@ -123,6 +127,7 @@ const Cell = memo(function Cell(p: CellProps) {
               p.onDropTarget(undefined);
             }}
           >
+            <span className="chip-status" aria-hidden="true" />
             <span className="chip-title">{item.title}</span>
           </button>
         ))}
@@ -213,7 +218,7 @@ export function MonthGrid({
     visibleLength = Math.ceil((selectedIndex + 1) / 7) * 7;
   const visibleGrid = grid.slice(0, visibleLength);
   const rows = visibleGrid.length / 7;
-  // 按实际高度决定显示条数：头部与留白约 44px，每条含间距 26px。
+  // 按实际头部、留白和事项尺寸计算容量，大小窗口都不裁切内容。
   const cellsRef = useRef<HTMLDivElement>(null);
   // 翻月：按方向让内容淡入并带一点位移。用 Web Animations 而不是重新挂载，
   // 否则 ResizeObserver 绑定的节点会被替换。「减少动态效果」时不播放。
@@ -239,11 +244,19 @@ export function MonthGrid({
     if (!node) return;
     const measure = () => {
       const row = node.clientHeight / rows;
-      // 留给「事项条 + 还有 N 项」的空间不足一条：进入紧凑模式（cap 仍至少 1 条）。
-      const withMore = Math.floor((row - 44 - 18) / 26);
+      const cell = node.firstElementChild as HTMLElement | null;
+      if (!cell) return;
+      const style = getComputedStyle(cell);
+      const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const head = cell.querySelector(".cell-head")?.getBoundingClientRect().height ?? 30;
+      const available = Math.max(0, row - padding - head - parseFloat(style.rowGap));
+      const itemHeight = parseFloat(style.getPropertyValue("--calendar-item-height")) || 26;
+      const itemGap = parseFloat(style.getPropertyValue("--calendar-item-gap")) || 5;
+      const step = itemHeight + itemGap;
+      const withMore = Math.floor((available - 20) / step);
       const next = {
-        cap: Math.max(1, Math.min(6, withMore)),
-        capAll: Math.max(1, Math.min(6, Math.floor((row - 44) / 26))),
+        cap: Math.max(0, Math.min(6, withMore)),
+        capAll: Math.max(0, Math.min(6, Math.floor((available + itemGap) / step))),
         compact: withMore < 1,
       };
       setCap((old) =>
