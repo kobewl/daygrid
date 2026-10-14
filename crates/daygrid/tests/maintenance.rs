@@ -45,10 +45,10 @@ fn migrates_v1_database_and_keeps_a_copy() {
     assert!(conns["data"]["connections"][0]["last_seen_at"].is_null());
     assert_eq!(
         call(&mut store, "desktop_diagnostics", json!({}))["data"]["schema_version"],
-        3
+        4
     );
     assert!(
-        dir.path().join("calendar.db.pre-v3.bak").exists(),
+        dir.path().join("calendar.db.pre-v4.bak").exists(),
         "迁移前应保留原样拷贝"
     );
     drop(store);
@@ -115,15 +115,15 @@ fn leftover_temp_files(dir: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn pre_v3_backup_is_verified_and_holds_pre_migration_data() {
+fn pre_v4_backup_is_verified_and_holds_pre_migration_data() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("calendar.db");
     let holder = v2_database(&path);
     let store = Store::open(&path, "secret").unwrap();
     drop(store);
     drop(holder);
-    assert_eq!(schema_version(&path), 3);
-    let backup = dir.path().join("calendar.db.pre-v3.bak");
+    assert_eq!(schema_version(&path), 4);
+    let backup = dir.path().join("calendar.db.pre-v4.bak");
     assert_valid_v2_backup(&backup);
     assert_eq!(
         fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
@@ -133,24 +133,24 @@ fn pre_v3_backup_is_verified_and_holds_pre_migration_data() {
 }
 
 #[test]
-fn invalid_existing_pre_v3_backup_is_replaced() {
+fn invalid_existing_pre_v4_backup_is_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("calendar.db");
-    let backup = dir.path().join("calendar.db.pre-v3.bak");
+    let backup = dir.path().join("calendar.db.pre-v4.bak");
     let holder = v2_database(&path);
     fs::write(&backup, b"not a database").unwrap();
     drop(Store::open(&path, "secret").unwrap());
     drop(holder);
-    assert_eq!(schema_version(&path), 3);
+    assert_eq!(schema_version(&path), 4);
     assert_valid_v2_backup(&backup);
     assert!(leftover_temp_files(dir.path()).is_empty());
 }
 
 #[test]
-fn failed_pre_v3_backup_aborts_the_migration() {
+fn failed_pre_v4_backup_aborts_the_migration() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("calendar.db");
-    let backup = dir.path().join("calendar.db.pre-v3.bak");
+    let backup = dir.path().join("calendar.db.pre-v4.bak");
     drop(v2_database(&path));
     // 备份路径被一个非空目录占着：快照无法改名到位。
     fs::create_dir(&backup).unwrap();
@@ -174,7 +174,7 @@ fn failed_pre_v3_backup_aborts_the_migration() {
     // 障碍移除后再次打开即可正常备份并升级。
     fs::remove_dir_all(&backup).unwrap();
     drop(Store::open(&path, "secret").unwrap());
-    assert_eq!(schema_version(&path), 3);
+    assert_eq!(schema_version(&path), 4);
     assert_valid_v2_backup(&backup);
 }
 

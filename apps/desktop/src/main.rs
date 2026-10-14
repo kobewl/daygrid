@@ -59,7 +59,7 @@ fn open_external(url: String) -> Result<(), String> {
         .map_err(|_| "无法打开该链接。".to_string())
 }
 
-const SERVICE_METHODS: [&str; 24] = [
+const SERVICE_METHODS: [&str; 32] = [
     "daygrid_get_context",
     "daygrid_list_items",
     "daygrid_get_item",
@@ -69,6 +69,7 @@ const SERVICE_METHODS: [&str; 24] = [
     "daygrid_month_overview",
     "desktop_delete",
     "desktop_restore",
+    "desktop_set_visibility",
     "desktop_history",
     "desktop_connections",
     "desktop_create_connection",
@@ -84,6 +85,13 @@ const SERVICE_METHODS: [&str; 24] = [
     "desktop_set_settings",
     "desktop_list_day_marks",
     "desktop_set_day_mark",
+    "desktop_sync_status",
+    "desktop_sync_connect",
+    "desktop_sync_disconnect",
+    "desktop_sync_presence",
+    "desktop_sync_conflicts",
+    "desktop_sync_resolve_conflict",
+    "desktop_sync_invite",
 ];
 
 fn dispatch(method: &str, args: Value) -> Value {

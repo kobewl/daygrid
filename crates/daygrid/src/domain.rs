@@ -19,6 +19,15 @@ pub struct Item {
     pub revision: i64,
     pub created_at: String,
     pub updated_at: String,
+    /// `private`：只在这台电脑上，永远不会上传；`shared`：团队日历里所有成员可见。
+    /// 没有连接协同时所有事项都只在本机，这个字段只在协同时才有意义；旧数据缺省为 `private`。
+    #[serde(default = "private")]
+    pub visibility: String,
+}
+
+pub const VISIBILITIES: [&str; 2] = ["private", "shared"];
+pub fn private() -> String {
+    "private".into()
 }
 
 pub fn decode<T: DeserializeOwned>(value: &Value) -> Result<T> {
@@ -67,6 +76,9 @@ pub fn validate(item: &mut Item) -> Result<()> {
     if !COLORS.contains(&item.color.as_str()) || !STATUSES.contains(&item.status.as_str()) {
         return Err(Error::new("VALIDATION_ERROR", "颜色或状态无效。"));
     }
+    if !VISIBILITIES.contains(&item.visibility.as_str()) {
+        return Err(Error::new("VALIDATION_ERROR", "可见范围无效。"));
+    }
     Ok(())
 }
 
@@ -81,6 +93,9 @@ pub struct Create {
     pub notes: String,
     #[serde(default = "blue")]
     pub color: String,
+    /// 只有日格界面能指定；助手创建的事项一律是 `private`。
+    #[serde(default)]
+    pub visibility: Option<String>,
 }
 fn blue() -> String {
     "blue".into()
@@ -134,6 +149,16 @@ pub struct Status {
     pub item_id: String,
     pub expected_revision: i64,
     pub status: String,
+}
+/// 改变可见范围（只对桌面界面开放）。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetVisibility {
+    pub idempotency_key: String,
+    pub calendar_generation: String,
+    pub item_id: String,
+    pub expected_revision: i64,
+    pub visibility: String,
 }
 /// MCP 删除：必须经用户在日格里确认。`reason` 会展示给用户，帮助判断是否批准。
 #[derive(Deserialize)]

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { preview, type Item } from "./api";
+import { call, preview, type Item } from "./api";
 import { ApprovalBar } from "./components/ApprovalBar";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { LogoMark } from "./components/icons";
@@ -7,9 +7,11 @@ import { ItemDialog, type DialogTarget } from "./components/ItemDialog";
 import { Sidebar, type ViewId } from "./components/Sidebar";
 import { useActions } from "./hooks/useActions";
 import { useCalendar } from "./hooks/useCalendar";
+import { useSync } from "./hooks/useSync";
 import { ToastProvider } from "./hooks/useToasts";
 import { usePrefs } from "./lib/prefs";
 import { useUpdater } from "./hooks/useUpdater";
+import { newItemVisibility } from "./lib/visibility";
 import { AssistantsView } from "./views/AssistantsView";
 import { CalendarView } from "./views/CalendarView";
 import { HistoryView } from "./views/HistoryView";
@@ -31,6 +33,29 @@ function Shell() {
   const [view, setView] = useState<ViewId>("calendar");
   const [dialog, setDialog] = useState<DialogTarget>();
   const [palette, setPalette] = useState(false);
+  const openCollab = useCallback(() => {
+    setView("settings");
+    setDialog(undefined);
+    // 等设置页渲染出来再滚动到「多人协作」。
+    setTimeout(() => document.getElementById("collab")?.scrollIntoView({ block: "start", behavior: "smooth" }), 80);
+  }, []);
+  const sync = useSync({
+    syncSequence: cal.pulse?.sync_sequence,
+    changeSequence: cal.pulse?.change_sequence,
+    onOpenConflicts: openCollab,
+  });
+
+  // 在线状态：告诉同事我在看哪一天、正在编辑哪个事项（只是提示，不加锁）。
+  const linked = !!sync.status?.linked;
+  const presenceDate = view === "calendar" ? cal.selected : undefined;
+  const editingId = dialog?.mode === "edit" ? dialog.item.id : undefined;
+  useEffect(() => {
+    if (!linked) return;
+    void call("desktop_sync_presence", {
+      ...(presenceDate ? { date: presenceDate } : {}),
+      ...(editingId ? { item_id: editingId, editing: true } : {}),
+    }).catch(() => undefined);
+  }, [linked, presenceDate, editingId]);
 
   const today = cal.context?.today;
   const createAt = useCallback(
@@ -153,6 +178,13 @@ function Shell() {
       nav("assistants", "MCP 连接", "plug", "⌘3"),
       nav("settings", "设置", "sliders", "⌘4"),
       {
+        id: "collab",
+        label: "打开多人协作设置",
+        icon: "plug",
+        keywords: "协同 团队 邀请 冲突 同步 sync collaboration",
+        run: openCollab,
+      },
+      {
         id: "theme-light",
         label: "切换到浅色主题",
         icon: "sun",
@@ -188,6 +220,7 @@ function Shell() {
     cal.goToday,
     cal.shiftMonth,
     createAt,
+    openCollab,
     today,
     prefs.weekStart,
     updatePrefs,
@@ -234,6 +267,8 @@ function Shell() {
           onView={openView}
           pending={cal.pending.length}
           onSearch={() => setPalette(true)}
+          sync={sync.status}
+          onSync={openCollab}
         />
         <main className="content">
           <ApprovalBar
@@ -245,6 +280,8 @@ function Shell() {
           {view === "calendar" && (
             <CalendarView
               cal={cal}
+              peers={sync.status?.peers ?? []}
+              teamMode={linked}
               weekStart={prefs.weekStart}
               holidays={prefs.holidays}
               keysEnabled={!overlay}
@@ -253,7 +290,7 @@ function Shell() {
               onToggle={actions.toggle}
               onRemove={actions.remove}
               onMove={actions.move}
-              onQuickAdd={actions.quickAdd}
+              onQuickAdd={(date, title) => actions.quickAdd(date, title, newItemVisibility(sync.status))}
             />
           )}
           {view === "history" && (
@@ -282,6 +319,7 @@ function Shell() {
               prefs={prefs}
               onPrefs={updatePrefs}
               changeSequence={cal.pulse?.change_sequence ?? 0}
+              sync={sync}
             />
           )}
         </main>
@@ -291,6 +329,7 @@ function Shell() {
         <ItemDialog
           key={dialog.mode === "edit" ? dialog.item.id : "new-" + dialog.date}
           target={dialog}
+          team={linked && sync.status?.config ? { role: sync.status.config.role } : null}
           onSave={actions.save}
           onToggle={actions.toggle}
           onDelete={actions.remove}

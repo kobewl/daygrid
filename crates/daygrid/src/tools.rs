@@ -24,7 +24,7 @@ fn color() -> Value {
 fn item() -> Value {
     json!({
         "title":"Daygrid calendar item","type":"object","additionalProperties":false,
-        "required":["id","date","title","notes","color","status","revision","created_at","updated_at"],
+        "required":["id","date","title","notes","color","status","revision","created_at","updated_at","visibility"],
         "properties":{
             "id":uuid(),"date":date(),
             "title":{"type":"string","minLength":1,"maxLength":200},
@@ -33,7 +33,8 @@ fn item() -> Value {
             "status":{"type":"string","enum":["planned","done"]},
             "revision":{"type":"integer","minimum":1},
             "created_at":{"type":"string","format":"date-time"},
-            "updated_at":{"type":"string","format":"date-time"}
+            "updated_at":{"type":"string","format":"date-time"},
+            "visibility":{"type":"string","enum":["private","shared"],"description":"private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."}
         }
     })
 }

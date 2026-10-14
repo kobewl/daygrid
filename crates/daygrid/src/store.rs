@@ -12,11 +12,15 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Instant,
 };
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 3;
+mod sync_ops;
+pub use sync_ops::{ApplyStats, PushBatch, SyncConfig, insecure_url, normalize_url};
+
+pub const SCHEMA_VERSION: i64 = 4;
 /// 助手发起的待确认请求有效期。
 pub const PROPOSAL_TTL_MINUTES: i64 = 10;
 /// 助手活动审计最多保留的条数。
@@ -159,6 +163,8 @@ pub struct Store {
     desktop_verifier: String,
     cursor_secret: String,
     started: Instant,
+    /// 协同同步线程与界面共享的易失状态（连接请求、在线成员等）。
+    runtime: Arc<crate::sync::runtime::Runtime>,
 }
 
 /// 写入前置检查的结果：要么这是一次重放，要么可以继续。
@@ -269,6 +275,9 @@ impl Store {
                 "CREATE TABLE IF NOT EXISTS day_marks(date TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('rest','work')),updated_at TEXT NOT NULL);",
             )?;
         }
+        // 0.5.0：多人协同。outbox（待推送变更）、服务端快照、冲突表；对不连接协同的用户是空表。
+        // 建表是幂等的，并补齐开发期 v4 库缺的列，所以每次打开都执行。
+        sync_ops::create_tables(&db)?;
         db.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"))?;
         let generation = Uuid::new_v4().to_string();
         db.execute(
@@ -290,6 +299,7 @@ impl Store {
             desktop_verifier: digest(desktop_token),
             cursor_secret: desktop_token.to_string(),
             started: Instant::now(),
+            runtime: Arc::new(Default::default()),
         })
     }
 
@@ -349,6 +359,11 @@ impl Store {
                 "连接未授权、已暂停、已撤销或没有写入权限。",
             )),
         }
+    }
+
+    /// 校验是不是桌面通道（供服务进程在锁外执行网络请求前使用）。
+    pub fn is_desktop(&self, actor: &str, token: &str) -> bool {
+        actor == "desktop" && digest(token) == self.desktop_verifier
     }
 
     pub fn call(&mut self, actor: &str, token: &str, method: &str, args: Value) -> Value {
@@ -452,7 +467,8 @@ impl Store {
             | "daygrid_set_item_status"
             | "daygrid_delete_item"
             | "desktop_delete"
-            | "desktop_restore" => self.write(actor, method, args),
+            | "desktop_restore"
+            | "desktop_set_visibility" => self.write(actor, method, args),
             "desktop_history" => self.history(&args),
             "desktop_connections" => self.connections(),
             "desktop_create_connection" => self.create_connection(&args),
@@ -466,6 +482,15 @@ impl Store {
             "desktop_backup" => self.backup(),
             "desktop_list_day_marks" => self.list_day_marks(&args),
             "desktop_set_day_mark" => self.set_day_mark(&args),
+            "desktop_sync_status" => self.sync_status(),
+            "desktop_sync_connect" => self.sync_connect(&args),
+            "desktop_sync_disconnect" => {
+                self.sync_unlink()?;
+                Ok(success(json!({})))
+            }
+            "desktop_sync_presence" => self.sync_presence(&args),
+            "desktop_sync_conflicts" => self.sync_conflicts(&args),
+            "desktop_sync_resolve_conflict" => self.sync_resolve_conflict(&args),
             "desktop_get_settings" => Ok(success(json!({"approval_mode":self.approval_mode()?}))),
             "desktop_set_settings" => {
                 #[derive(Deserialize)]
@@ -933,7 +958,8 @@ impl Store {
             "change_sequence":self.sequence()?,
             "pending_proposals":pending,
             "proposal_rev":newest,
-            "activity_sequence":activity
+            "activity_sequence":activity,
+            "sync_sequence":self.runtime.seq()
         })))
     }
 
@@ -1104,6 +1130,10 @@ impl Store {
                 let a: domain::Delete = domain::decode(args)?;
                 (a.item_id, a.expected_revision)
             }
+            "desktop_set_visibility" => {
+                let a: domain::SetVisibility = domain::decode(args)?;
+                (a.item_id, a.expected_revision)
+            }
             _ => {
                 let a: domain::Lifecycle = domain::decode(args)?;
                 (a.item_id, a.expected_revision)
@@ -1121,9 +1151,11 @@ impl Store {
     ) -> Result<Value> {
         let now = Utc::now().to_rfc3339();
         let operation_id = Uuid::new_v4().to_string();
+        let viewer = self.sync_is_viewer()?;
         let (mut item, before, action, expected) = match method {
             "daygrid_create_item" => {
                 let a: domain::Create = domain::decode(args)?;
+                let visibility = self.create_visibility(actor, a.visibility.as_deref())?;
                 let mut i = Item {
                     id: Uuid::new_v4().to_string(),
                     date: a.date,
@@ -1134,6 +1166,7 @@ impl Store {
                     revision: 1,
                     created_at: now.clone(),
                     updated_at: now.clone(),
+                    visibility,
                 };
                 domain::validate(&mut i)?;
                 (i, None, "create", None)
@@ -1164,11 +1197,30 @@ impl Store {
                     }
                     "desktop_delete" | "daygrid_delete_item" => "delete",
                     "desktop_restore" => "restore",
+                    "desktop_set_visibility" => {
+                        let a: domain::SetVisibility = domain::decode(args)?;
+                        if a.visibility == "shared" {
+                            self.ensure_linked_for_sharing()?;
+                        }
+                        i.visibility = a.visibility;
+                        domain::validate(&mut i)?;
+                        "visibility"
+                    }
                     _ => unreachable!(),
                 };
                 (i, Some(before), action, Some(revision))
             }
         };
+        // 只读成员不能写团队共享的事项（不管是手工、助手还是批准后的助手请求）；自己私有的事项照常可写。
+        if viewer
+            && (item.visibility == "shared"
+                || before.as_ref().is_some_and(|b| b.visibility == "shared"))
+        {
+            return Err(Error::new(
+                "PERMISSION_DENIED",
+                "你在团队日历里是只读成员，不能修改共享的事项。",
+            ));
+        }
         let changed = before.as_ref() != Some(&item) || matches!(action, "delete" | "restore");
         let mut sequence = self.sequence()?;
         let tx = self.db.transaction()?;
@@ -1209,7 +1261,14 @@ impl Store {
             "INSERT INTO receipts VALUES(?1,?2,?3,?4)",
             params![actor, key, hash, result.to_string()],
         )?;
+        if changed {
+            // 已连接协同时，同一事务里写入 outbox（手工修改与 MCP 写入走同一条路径）。
+            sync_ops::enqueue_local(&tx, &item.id)?;
+        }
         tx.commit()?;
+        if changed {
+            self.runtime.wake();
+        }
         Ok(result)
     }
 
@@ -1252,6 +1311,7 @@ impl Store {
                     revision: 1,
                     created_at: now.clone(),
                     updated_at: now,
+                    visibility: "private".into(),
                 };
                 domain::validate(&mut i)?;
                 (

@@ -8,6 +8,7 @@ import {
   type Item,
   type Proposal,
   type Pulse,
+  type Visibility,
 } from "../api";
 import {
   MAX_DATE,
@@ -22,8 +23,11 @@ import { useDayMarks } from "./useDayMarks";
 import { useNotify } from "./useToasts";
 import { dateInTimeZone, millisecondsUntilNextDay } from "../lib/calendarClock";
 
-export type ItemInput = Pick<Item, "date" | "title" | "notes" | "color">;
-export type ItemPatch = Partial<ItemInput>;
+export type ItemInput = Pick<Item, "date" | "title" | "notes" | "color"> & {
+  /** 只有连接了团队日历时才会传；缺省时后端按「仅自己可见」创建。 */
+  visibility?: Visibility;
+};
+export type ItemPatch = Partial<Omit<ItemInput, "visibility">>;
 
 const PULSE_MS = 2000;
 const CONTEXT_EVERY = 30; // 定期核对设置；日期边界与回到前台另外立即核对。
@@ -487,6 +491,26 @@ export function useCalendar(weekStart: WeekStart) {
     [enqueue, base, commit],
   );
 
+  /** 改变可见范围；`revision` 缺省时用本地最新版本。 */
+  const setVisibility = useCallback(
+    (id: string, visibility: Visibility, options: { revision?: number } = {}) =>
+      enqueue(async () => {
+        const current = itemsRef.current.find((i) => i.id === id);
+        const revision = options.revision ?? current?.revision;
+        if (!revision) throw new ApiError("NOT_FOUND", "事项不存在。");
+        const r = await call<{ item: Item }>("desktop_set_visibility", {
+          ...base(),
+          item_id: id,
+          expected_revision: revision,
+          visibility,
+        });
+        epoch.current++;
+        commit((prev) => prev.map((i) => (i.id === id ? r.item : i)));
+        return r.item;
+      }),
+    [enqueue, base, commit],
+  );
+
   const decide = useCallback(
     async (proposalId: string, decision: "approve" | "reject") => {
       const r = await call<{ proposal: Proposal }>("desktop_decide_proposal", {
@@ -538,6 +562,7 @@ export function useCalendar(weekStart: WeekStart) {
     refreshProposals,
     createItem,
     updateItem,
+    setVisibility,
     setStatus,
     removeItem,
     restoreItem,

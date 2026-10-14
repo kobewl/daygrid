@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, colorName, type Item } from "../api";
+import { ApiError, colorName, type Item, type Visibility } from "../api";
 import { MAX_DATE, MIN_DATE } from "../lib/dates";
 import { automaticColor } from "../lib/itemColor";
-import { diffItems } from "../lib/labels";
+import { diffItems, VISIBILITY_LABEL } from "../lib/labels";
+import { rememberedVisibility } from "../lib/visibility";
 import { cx } from "../lib/util";
 import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
@@ -17,6 +18,10 @@ export type Draft = {
   notes: string;
   color: string;
   status?: Item["status"];
+  /** 连接了团队日历时才有：新建时的初始选择 / 编辑时当前的可见范围。 */
+  visibility?: Visibility;
+  /** 编辑时打开对话框那一刻的可见范围，用来判断有没有改。 */
+  originalVisibility?: Visibility;
 };
 
 export type DialogTarget =
@@ -27,12 +32,15 @@ const len = (s: string) => [...s].length;
 
 export function ItemDialog({
   target,
+  team,
   onSave,
   onToggle,
   onDelete,
   onClose,
 }: {
   target: DialogTarget;
+  /** 团队协同状态：只有连接了团队才显示「可见范围」。`viewer` 不能共享事项，只显示说明。 */
+  team?: { role: "owner" | "editor" | "viewer" } | null;
   /** 返回保存后的事项；失败时抛 ApiError。 */
   onSave: (draft: Draft) => Promise<void>;
   onToggle: (item: Item) => void;
@@ -50,6 +58,12 @@ export function ItemDialog({
             notes: target.item.notes,
             color: target.item.color,
             status: target.item.status,
+            ...(team
+              ? {
+                  visibility: target.item.visibility,
+                  originalVisibility: target.item.visibility,
+                }
+              : {}),
           }
         : {
             revision: 0,
@@ -57,8 +71,9 @@ export function ItemDialog({
             title: "",
             notes: "",
             color: "sage",
+            ...(team && team.role !== "viewer" ? { visibility: rememberedVisibility() } : {}),
           },
-    [target],
+    [target, team],
   );
   const [draft, setDraft] = useState<Draft>(original);
   const [error, setError] = useState("");
@@ -86,7 +101,8 @@ export function ItemDialog({
     draft.title !== original.title ||
     draft.notes !== original.notes ||
     draft.date !== original.date ||
-    draft.color !== original.color;
+    draft.color !== original.color ||
+    draft.visibility !== original.visibility;
   const edit = target.mode === "edit" ? target.item : undefined;
   // 配色预示：新建时保存会按标题自动分配（见 useActions.save），编辑时保留原色。
   // 与保存时用的是同一个函数，所以这里看到的就是保存后的颜色。
@@ -207,6 +223,9 @@ export function ItemDialog({
                         notes: conflict.notes,
                         color: conflict.color,
                         status: conflict.status,
+                        ...(team
+                          ? { visibility: conflict.visibility, originalVisibility: conflict.visibility }
+                          : {}),
                       });
                       setConflict(undefined);
                     }}
@@ -323,6 +342,36 @@ export function ItemDialog({
               </div>
             )}
           </div>
+
+          {team && (
+            <div className="field visibility-field">
+              <span id="visibility-label">谁能看到这个事项</span>
+              {team.role === "viewer" && !(edit && edit.visibility === "shared") ? (
+                <p className="muted small">你是只读成员：这个事项只保存在你自己的电脑上，不会共享。</p>
+              ) : team.role === "viewer" ? (
+                <p className="muted small">这是团队共享的事项，只读成员不能修改。</p>
+              ) : (
+                <>
+                  <Segmented<Visibility>
+                    label="可见范围"
+                    value={draft.visibility ?? "private"}
+                    onChange={(v) => change("visibility", v)}
+                    options={[
+                      { value: "private", label: VISIBILITY_LABEL.private },
+                      { value: "shared", label: VISIBILITY_LABEL.shared },
+                    ]}
+                  />
+                  <small className="muted">
+                    {(draft.visibility ?? "private") === "shared"
+                      ? "团队日历里的所有成员都能看到，也能一起编辑。"
+                      : edit?.visibility === "shared"
+                        ? "保存后会从团队日历撤回，同事将不再看到它；你这里的内容原样保留。"
+                        : "只保存在这台电脑上，不会上传，同事看不到。"}
+                  </small>
+                </>
+              )}
+            </div>
+          )}
 
           {error && (
             <p className="form-error" role="alert">

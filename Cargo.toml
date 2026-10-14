@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/daygrid", "apps/desktop"]
-default-members = ["crates/daygrid"]
+members = ["crates/daygrid", "crates/daygrid-server", "apps/desktop"]
+default-members = ["crates/daygrid", "crates/daygrid-server"]
 
 [workspace.package]
 version = "0.4.0"

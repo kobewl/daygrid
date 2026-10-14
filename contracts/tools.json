@@ -375,7 +375,8 @@
                         "status",
                         "revision",
                         "created_at",
-                        "updated_at"
+                        "updated_at",
+                        "visibility"
                       ],
                       "properties": {
                         "id": {
@@ -425,6 +426,14 @@
                         "updated_at": {
                           "type": "string",
                           "format": "date-time"
+                        },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "private",
+                            "shared"
+                          ],
+                          "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
                         }
                       }
                     }
@@ -563,7 +572,8 @@
                       "status",
                       "revision",
                       "created_at",
-                      "updated_at"
+                      "updated_at",
+                      "visibility"
                     ],
                     "properties": {
                       "id": {
@@ -613,6 +623,14 @@
                       "updated_at": {
                         "type": "string",
                         "format": "date-time"
+                      },
+                      "visibility": {
+                        "type": "string",
+                        "enum": [
+                          "private",
+                          "shared"
+                        ],
+                        "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
                       }
                     }
                   }
@@ -776,7 +794,8 @@
                           "status",
                           "revision",
                           "created_at",
-                          "updated_at"
+                          "updated_at",
+                          "visibility"
                         ],
                         "properties": {
                           "id": {
@@ -826,6 +845,14 @@
                           "updated_at": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "enum": [
+                              "private",
+                              "shared"
+                            ],
+                            "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
                           }
                         }
                       },
@@ -1080,7 +1107,8 @@
                           "status",
                           "revision",
                           "created_at",
-                          "updated_at"
+                          "updated_at",
+                          "visibility"
                         ],
                         "properties": {
                           "id": {
@@ -1130,6 +1158,14 @@
                           "updated_at": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "enum": [
+                              "private",
+                              "shared"
+                            ],
+                            "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
                           }
                         }
                       },
@@ -1359,7 +1395,8 @@
                           "status",
                           "revision",
                           "created_at",
-                          "updated_at"
+                          "updated_at",
+                          "visibility"
                         ],
                         "properties": {
                           "id": {
@@ -1409,6 +1446,14 @@
                           "updated_at": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "enum": [
+                              "private",
+                              "shared"
+                            ],
+                            "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
                           }
                         }
                       },
@@ -1636,7 +1681,8 @@
                           "status",
                           "revision",
                           "created_at",
-                          "updated_at"
+                          "updated_at",
+                          "visibility"
                         ],
                         "properties": {
                           "id": {
@@ -1686,6 +1732,14 @@
                           "updated_at": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "enum": [
+                              "private",
+                              "shared"
+                            ],
+                            "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
                           }
                         }
                       },

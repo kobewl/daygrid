@@ -1,8 +1,9 @@
 import { useCallback } from "react";
-import type { Item } from "../api";
+import type { Item, Visibility } from "../api";
 import type { Draft } from "../components/ItemDialog";
 import { dayTitle } from "../lib/dates";
 import { automaticColor } from "../lib/itemColor";
+import { rememberVisibility } from "../lib/visibility";
 import type { Calendar } from "./useCalendar";
 import { useNotify } from "./useToasts";
 
@@ -62,13 +63,14 @@ export function useActions(cal: Calendar) {
   );
 
   const quickAdd = useCallback(
-    async (date: string, title: string) => {
+    async (date: string, title: string, visibility?: Visibility) => {
       try {
         await cal.createItem({
           date,
           title,
           notes: "",
           color: automaticColor(title),
+          ...(visibility ? { visibility } : {}),
         });
         return true;
       } catch (e) {
@@ -88,13 +90,26 @@ export function useActions(cal: Calendar) {
         notes: draft.notes,
         color: draft.id ? draft.color : automaticColor(draft.title),
       };
-      if (draft.id)
+      if (draft.visibility) rememberVisibility(draft.visibility);
+      if (draft.id) {
         await cal.updateItem(draft.id, fields, { revision: draft.revision });
-      else await cal.createItem(fields);
+        // 可见范围是单独的写入口（它还要通知同步引擎撤回 / 上传）；改了才调用。
+        if (draft.visibility && draft.visibility !== draft.originalVisibility)
+          await cal.setVisibility(draft.id, draft.visibility);
+      } else {
+        await cal.createItem({
+          ...fields,
+          ...(draft.visibility ? { visibility: draft.visibility } : {}),
+        });
+      }
       cal.goDate(draft.date);
-      notify("已保存");
+      notify(
+        draft.visibility === "private" && draft.originalVisibility === "shared"
+          ? "已保存，并从团队日历撤回（同事将不再看到它）"
+          : "已保存",
+      );
     },
-    [cal.updateItem, cal.createItem, cal.goDate, notify], // eslint-disable-line react-hooks/exhaustive-deps
+    [cal.updateItem, cal.createItem, cal.setVisibility, cal.goDate, notify], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const decide = useCallback(

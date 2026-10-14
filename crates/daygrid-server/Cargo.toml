@@ -1,0 +1,32 @@
+[package]
+name = "daygrid-server"
+description = "Daygrid 自托管协同服务端：成员与邀请、字段级合并、增量同步、在线状态"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "daygrid_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "daygrid-server"
+path = "src/main.rs"
+
+[dependencies]
+daygrid = { path = "../daygrid" }
+serde.workspace = true
+serde_json.workspace = true
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "std", "registry"] }
+
+[dev-dependencies]
+tempfile = "3"

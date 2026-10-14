@@ -18,6 +18,13 @@
 - 命令面板（⌘K）：跨所有日期搜索事项、输入 `10-20` / `明天` 跳转、执行常用命令。
 - SQLite 持久保存、软删除、修改记录（字段级前后对比）与删除恢复。
 
+**多人协同（可选，需自建 `daygrid-server`）**
+
+- 多台电脑共享同一份团队日历，同时编辑按字段自动合并（标题 / 备注 / 日期 / 颜色 / 完成状态各自合并；备注按行三方合并），冲突保留双方版本并可一键采用自己的。断网可继续编辑，恢复后自动补传。
+- 每个事项可选「仅自己可见 / 所有人可见」，默认仅自己；仅自己可见的事项不会离开本机。
+- owner / editor / viewer 角色、邀请码、在线成员、最后编辑者。在设置 → 多人协作里连接；不连接时与以前完全一致。
+- 服务端：`cargo run -p daygrid-server -- init --workspace 团队 --owner 你的名字` 创建并拿到令牌，`serve` 启动，`invite` 生成邀请码。服务端自身不提供 TLS，公网使用请放在 TLS 反向代理后面。
+
 **MCP 连接**
 
 - 9 个 stdio MCP 工具：上下文、月概览、范围查询、按 ID 查询、新建、编辑、完成状态、删除、查询确认结果；另有 3 个资源与 2 个提示词。
@@ -113,7 +120,7 @@ node scripts/check-version.mjs   # 版本号单一真值检查
 - [交互设计参考](design/README.md)
 - [更新日志](CHANGELOG.md)
 
-工程结构：`apps/desktop` 桌面壳，`packages/ui` React 界面，`crates/daygrid` 领域规则、SQLite、IPC、MCP 客户端配置安装与两个可执行程序。
+工程结构：`apps/desktop` 桌面壳，`packages/ui` React 界面，`crates/daygrid` 领域规则、SQLite、IPC、同步引擎（`sync/`）、MCP 客户端配置安装与两个可执行程序，`crates/daygrid-server` 团队同步服务。
 
 ## 发布
 

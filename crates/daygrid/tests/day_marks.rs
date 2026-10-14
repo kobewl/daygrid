@@ -124,10 +124,10 @@ fn v2_database_migrates_and_keeps_existing_data() {
             .unwrap();
     }
     let mut store = Store::open(&path, "secret").unwrap();
-    assert!(dir.path().join("calendar.db.pre-v3.bak").exists());
+    assert!(dir.path().join("calendar.db.pre-v4.bak").exists());
     assert_eq!(
         call(&mut store, "desktop", "desktop_diagnostics", json!({}))["data"]["schema_version"],
-        3
+        4
     );
     call(
         &mut store,

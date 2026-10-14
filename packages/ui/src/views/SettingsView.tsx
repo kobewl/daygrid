@@ -6,9 +6,11 @@ import {
   type ApprovalMode,
   type Diagnostics,
 } from "../api";
+import { CollabSettings } from "../components/CollabSettings";
 import { Icon } from "../components/icons";
 import { Segmented } from "../components/Segmented";
 import { SoftwareUpdate } from "../components/SoftwareUpdate";
+import type { Sync } from "../hooks/useSync";
 import type { Updater } from "../hooks/useUpdater";
 import { useNotify } from "../hooks/useToasts";
 import { relativeTime, type WeekStart } from "../lib/dates";
@@ -41,7 +43,9 @@ export function SettingsView({
   prefs,
   onPrefs,
   changeSequence,
+  sync,
 }: {
+  sync: Sync;
   updater: Updater;
   prefs: Prefs;
   onPrefs: (patch: Partial<Prefs>) => void;
@@ -102,7 +106,7 @@ export function SettingsView({
       <header className="view-head">
         <div>
           <h1>设置</h1>
-          <p className="muted">外观、周起始日与休息日规则只保存在这台电脑上；权限设置控制 MCP 客户端如何访问日历。</p>
+          <p className="muted">外观、周起始日与休息日规则只保存在这台电脑上；多人协作让团队共用一份日历；权限设置控制 MCP 客户端如何访问日历。</p>
         </div>
       </header>
 
@@ -152,6 +156,8 @@ export function SettingsView({
           />
         </Row>
       </section>
+
+      <CollabSettings sync={sync} />
 
       <section className="card">
         <h2>MCP 连接权限</h2>

@@ -24,6 +24,17 @@ MCP stdio 桥接 ─┘
 
 批量计划与事务、MCP 侧恢复与历史查询工具、备份恢复界面、全局筛选、事件订阅、时区设置、Apple 签名与公证、自动更新。
 
+## 多人协同（Unreleased，schema v4）
+
+- **拓扑**：每台电脑仍是「本地服务 + SQLite」，可选地连接一个 `daygrid-server`（axum + SQLite，服务端权威）。同步引擎在 `crates/daygrid/src/sync/`（`hlc` 混合逻辑时钟、`merge` 字段合并、`client` 推拉循环、`runtime` 连接管理），本地存储侧在 `store/sync_ops.rs`。
+- **核心不变量**：共享事项的本地内容 = 服务器快照（`sync_items`）+ 出箱（`sync_outbox`）叠加，由 `rebuild_local` 重算。所有本地写入走 `reconcile_item`：把本地内容与「有效状态」做差，产出 Create / Restore / Update / Delete 操作，每个字段带 `prev`（修改前的值）。因此被拒绝、LWW 落败、重放的操作都不会造成漂移。
+- **合并**：服务端按字段处理。`prev == 当前值` 直接采用；否则以 `prev`（缺省取 `base_rev` 的历史版本）为共同祖先，备注做 diffy 三方合并，其余字段 / 合并冲突回退到 HLC 较新者（LWW）并写入冲突记录。不做任何按用户身份的短路。删除优先，恢复按 LWW。
+- **幂等**：每个操作有 `op_id`，服务端 `applied_ops` 记录（含用户与内容摘要）；同一 `op_id` 内容不同返回 `OP_ID_REUSED`。
+- **可见性**：`Item.visibility`（`private` 默认 / `shared`）只存在本机事项 JSON 里，私有事项从不产生操作。`desktop_set_visibility`（仅桌面通道）：共享 → 私有 = 服务端软删除并保留本地副本，私有 → 共享 = Restore + 差异 Update。MCP 创建的事项恒为私有。
+- **团队切换**：`sync_last_team`（`url|workspace`）变化时所有事项转私有、丢弃快照与冲突，并把曾经共享过的事项排除在 `share_existing` 之外；同一团队重连则保留快照并对账离线期间的编辑与删除。
+- **角色**：owner / editor / viewer 随 `PullResponse.role` 到达；降级为 viewer 时丢弃出箱并记为 `read_only` 冲突、回滚本地；viewer 仍可写私有事项。
+- **已知限制**：SSE 的 30 秒令牌复核已实现但没有端到端测试；`contract_version` 未变化（MCP 契约无改动）。
+
 ## 0.4.0：休息日标记与备注链接
 
 - **Schema v3**：新增 `day_marks(date, kind, updated_at)`，只存手动标记（`rest` / `work`）。`desktop_list_day_marks` 按范围读取，`desktop_set_day_mark` 写入，`kind=default` 删除；两者只对桌面通道开放，不在 MCP 工具里。迁移前用 `VACUUM INTO` 写临时文件，只读校验（`integrity_check` 为 ok、`user_version` 等于迁移前版本）、fsync 后原子改名为 `*.pre-v3.bak`；已有同名备份同样校验，无效则替换。备份失败时 `Store::open` 返回 `STORAGE_ERROR`，不执行迁移，数据库保持原版本。

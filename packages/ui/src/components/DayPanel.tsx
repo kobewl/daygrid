@@ -1,8 +1,9 @@
 import { useState } from "react";
-import type { Item } from "../api";
+import type { Item, SyncPeer } from "../api";
 import { addDays, dayTitle, weekdayLong } from "../lib/dates";
 import { cx } from "../lib/util";
 import { kindLabel, type DayInfo, type MarkValue } from "../lib/workday";
+import { Avatars } from "./Avatars";
 import { Icon } from "./icons";
 import { firstNoteLine, Markdown } from "./Markdown";
 import { Segmented } from "./Segmented";
@@ -13,6 +14,8 @@ export function DayPanel({
   items,
   day,
   fresh,
+  peers,
+  teamMode,
   onMark,
   onToggle,
   onOpen,
@@ -20,6 +23,10 @@ export function DayPanel({
   onQuickAdd,
   onAdd,
 }: {
+  /** 协同时：在线的同事（含他们正在看哪一天、正在编辑哪个事项）。 */
+  peers: SyncPeer[];
+  /** 连接了团队日历：事项行显示「仅自己」标记。 */
+  teamMode: boolean;
   date: string;
   today: string;
   items: Item[];
@@ -38,6 +45,8 @@ export function DayPanel({
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const done = items.filter((i) => i.status === "done").length;
+  const viewing = peers.filter((p) => p.date === date);
+  const editors = (id: string) => [...new Set(peers.filter((p) => p.editing && p.item_id === id).map((p) => p.user))];
   const relative =
     date === today
       ? "今天"
@@ -80,6 +89,12 @@ export function DayPanel({
           <Icon name="plus" />
         </button>
       </header>
+      {viewing.length > 0 && (
+        <p className="presence" role="status">
+          <Avatars peers={viewing} />
+          <span>{[...new Set(viewing.map((p) => p.user))].join("、")} 也在看这一天</span>
+        </p>
+      )}
       <section
         className={cx("daykind", day.kind, day.special && "special")}
         aria-label="这一天是休息日还是工作日"
@@ -175,6 +190,14 @@ export function DayPanel({
                 <button type="button" className="row-title">
                   {item.title}
                 </button>
+                {teamMode && item.visibility === "private" && (
+                  <span className="vis-badge" title="仅自己可见：不会上传，同事看不到">
+                    <Icon name="lock" size={11} /> 仅自己
+                  </span>
+                )}
+                {editors(item.id).length > 0 && (
+                  <span className="row-editing">{editors(item.id).join("、")} 正在编辑…</span>
+                )}
                 {firstNoteLine(item.notes) && (
                   <div className="row-sub">
                     <Markdown source={firstNoteLine(item.notes)} inline />
