@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod reminders;
 mod update;
 
 use daygrid::{Error, VERSION, clients, ipc, logging};
@@ -9,9 +10,24 @@ use std::{
     sync::OnceLock,
     time::Instant,
 };
+#[cfg(target_os = "macos")]
+use tauri::{Emitter, Manager};
 
 /// 桌面通道的根令牌：每个进程只读一次文件。
 static TOKEN: OnceLock<(PathBuf, String)> = OnceLock::new();
+
+/// 桌面通道令牌：route 和提醒线程共用，每个进程只读一次文件。
+pub(crate) fn desktop_token(dir: &Path) -> &'static str {
+    TOKEN
+        .get_or_init(|| {
+            (
+                dir.to_path_buf(),
+                ipc::secret(dir, "desktop.key").unwrap_or_default(),
+            )
+        })
+        .1
+        .as_str()
+}
 
 #[tauri::command]
 async fn calendar_call(method: String, args: Value) -> Value {
@@ -146,11 +162,7 @@ fn route(method: &str, args: Value) -> Result<Value, Error> {
     if !SERVICE_METHODS.contains(&method) {
         return Err(Error::new("PERMISSION_DENIED", "不允许的桌面操作。"));
     }
-    let token = TOKEN.get_or_init(|| {
-        let token = ipc::secret(&dir, "desktop.key").unwrap_or_default();
-        (dir.clone(), token)
-    });
-    let token = token.1.as_str();
+    let token = desktop_token(&dir);
     let mut value = ipc::call(&dir, "desktop", token, method, args);
     if method == "desktop_create_connection" && value["ok"] == true {
         let id = value["data"]["id"].as_str().unwrap_or_default().to_string();
@@ -236,20 +248,56 @@ fn main() {
         .ok()
         .map(|dir| logging::init(&dir, "desktop", false));
     tracing::info!(version = VERSION, "desktop started");
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(update::UpdateState::default())
+        .setup(|app| {
+            // 顺序固定：先给通知 delegate 补方法，再启动提醒线程（早于任何一次发送）。
+            #[cfg(target_os = "macos")]
+            reminders::present_while_frontmost();
+            reminders::spawn(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             calendar_call,
             app_attention,
             open_external,
+            reminders::reminder_test,
             update::check_update,
             update::install_update,
             update::restart_after_update,
             update::open_release_page
-        ])
-        .run(tauri::generate_context!())
-        .expect("Daygrid desktop failed to start");
+        ]);
+    // macOS：关闭主窗口只是隐藏，应用和提醒线程继续运行；⌘Q 才退出。
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_window_event(|window, event| {
+        if window.label() == "main"
+            && let tauri::WindowEvent::CloseRequested { api, .. } = event
+        {
+            api.prevent_close();
+            let _ = window.hide();
+            let _ = window.emit("daygrid://window-hidden", ());
+        }
+    });
+    builder
+        .build(tauri::generate_context!())
+        .expect("Daygrid desktop failed to start")
+        .run(on_run_event);
+}
+
+/// 点程序坞图标（Reopen）时重新显示隐藏的主窗口。
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Reopen { .. } = event
+        && let Some(window) = app.get_webview_window("main")
+    {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("daygrid://window-shown", ());
+    }
 }
 
 #[cfg(test)]

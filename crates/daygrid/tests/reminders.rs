@@ -1032,3 +1032,68 @@ fn approved_pre_upgrade_proposals_carry_remind_at_null() {
             .contains_key("remind_at")
     );
 }
+
+/// 调度循环接真实 Store：take 调用 take_due_reminders_at(虚拟 now)，提示文件是 Store 写下的真文件。
+struct StoreEnv<'a> {
+    h: &'a mut H,
+    now: i64,
+    end: i64,
+    notified: Vec<(i64, daygrid::reminder::Due)>,
+    takes: usize,
+    waits: Vec<std::time::Duration>,
+}
+impl daygrid::reminder::SchedulerEnv for StoreEnv<'_> {
+    fn now_ms(&self) -> i64 {
+        self.now
+    }
+    fn wait(&mut self, timeout: std::time::Duration) -> bool {
+        self.waits.push(timeout);
+        self.now += i64::try_from(timeout.as_millis()).unwrap();
+        false
+    }
+    fn sleep(&mut self, d: std::time::Duration) {
+        self.now += i64::try_from(d.as_millis()).unwrap();
+    }
+    fn read_hint(&mut self) -> Option<Option<i64>> {
+        daygrid::reminder::read_hint(self.h.dir.path())
+    }
+    fn take_and_notify(&mut self) -> Result<Option<i64>, ()> {
+        self.takes += 1;
+        let now = DateTime::from_timestamp_millis(self.now).unwrap();
+        let v = self.h.store.take_due_reminders_at(now).map_err(|_| ())?;
+        let r: daygrid::reminder::TakeDue = serde_json::from_value(v["data"].clone()).unwrap();
+        self.notified
+            .extend(r.reminders.into_iter().map(|d| (self.now, d)));
+        Ok(r.next_due_ms)
+    }
+    fn should_stop(&self) -> bool {
+        self.now >= self.end
+    }
+}
+
+#[test]
+fn scheduler_with_virtual_clock_fires_exactly_once() {
+    let mut h = H::new();
+    let item = h.create(json!({"remind_at":from_now(5)}));
+    let due = ms(item["remind_at"].as_str().unwrap());
+    let start = Utc::now().timestamp_millis();
+    let mut env = StoreEnv {
+        h: &mut h,
+        now: start,
+        end: start + 30 * 60_000,
+        notified: vec![],
+        takes: 0,
+        waits: vec![],
+    };
+    daygrid::reminder::run_scheduler(&mut env);
+    assert_eq!(env.notified.len(), 1, "{:?}", env.notified);
+    let (at, d) = &env.notified[0];
+    assert_eq!(d.item_id, item["id"].as_str().unwrap());
+    assert!((at - due).abs() <= 1000, "fired at {at}, due {due}");
+    assert!(env.takes <= 3, "takes {}", env.takes);
+    assert!(env.waits.len() <= 35, "waits {}", env.waits.len());
+    // 只有到点的那一轮可以不等待（循环直接跳过 wait），记录下来的 wait 都 > 0
+    assert!(env.waits.iter().all(|w| !w.is_zero()));
+    assert_eq!(h.row(&item["id"]), Some((due, true)));
+    assert_eq!(h.hint(), json!({"v":1,"next_due_ms":null}));
+}

@@ -16,6 +16,13 @@ serde_json.workspace = true
 serde.workspace = true
 tracing = "0.1"
 tauri-plugin-updater = "2"
+tauri-plugin-notification = "=2.4.0"
+[target.'cfg(target_os = "macos")'.dependencies]
+# 前台也弹横幅：给 mac-notification-sys 的 delegate 补 shouldPresentNotification:（已在 Cargo.lock 中）
+objc2 = "=0.6.5"
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# 只给类名测试用，保证测试二进制链接进 notify.m
+mac-notification-sys = "=0.6.15"
 
 [features]
 default = ["custom-protocol"]

@@ -2,7 +2,10 @@
 //!
 //! 服务端负责「什么时候到期、是否已经触发」（见 `store/reminders.rs`），
 //! 桌面进程只负责到点后调用 `desktop_take_due_reminders`，再用这里的函数生成通知文本。
+//! 桌面进程的调度循环（`run_scheduler`）也放在这里，时钟和副作用都通过 `SchedulerEnv` 注入，
+//! 不需要 Tauri 就能用虚拟时钟测试。
 use serde::{Deserialize, Serialize};
+use std::{io::Read, path::Path, time::Duration};
 
 /// 数据目录下的提示文件：`{"v":1,"next_due_ms":<i64|null>}`。
 pub const HINT_FILE: &str = "reminders.next";
@@ -152,6 +155,222 @@ pub fn plan_notifications(dues: &[Due], today: &str) -> Vec<(String, String)> {
     out
 }
 
+/// 提示文件最多读这么多字节；正常内容不到 100 B。
+const HINT_MAX: u64 = 4 * 1024;
+/// 没有已知的下一个提醒时，最长等这么久再看一次（也兜住睡眠唤醒和改时钟）。
+const MAX_WAIT_MS: i64 = 60_000;
+/// 服务不可用时的退避。
+const BACKOFF_MS: i64 = 60_000;
+/// 提前这么多毫秒以内就算到期（与服务端 `due_ms <= now + 999` 一致）。
+const DUE_SLACK_MS: i64 = 999;
+/// 连续取到「仍已到期」的 next 这么多次后暂停一下，防止忙循环。
+const RETAKE_BURST: u32 = 5;
+const RETAKE_PAUSE: Duration = Duration::from_secs(1);
+/// 连续这么多次读不到有效提示时主动 take，让服务重写文件。
+const HINT_MISSES: u8 = 3;
+
+/// 读提示文件：外层 None 表示文件不存在或格式不对；内层是 `next_due_ms`。
+pub fn read_hint(dir: &Path) -> Option<Option<i64>> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Hint {
+        v: u32,
+        next_due_ms: Option<i64>,
+    }
+    let mut text = String::new();
+    std::fs::File::open(dir.join(HINT_FILE))
+        .ok()?
+        .take(HINT_MAX)
+        .read_to_string(&mut text)
+        .ok()?;
+    let hint: Hint = serde_json::from_str(&text).ok()?;
+    (hint.v == 1).then_some(hint.next_due_ms)
+}
+
+/// 监视数据目录：提示文件用 tmp + rename 替换，目录条目变化会触发目录的 `NOTE_WRITE`。
+/// 监视的是目录而不是文件，因为 rename 会换掉文件的 inode。
+pub struct HintWatcher {
+    #[cfg(target_os = "macos")]
+    kq: libc::c_int,
+    #[cfg(target_os = "macos")]
+    dir: libc::c_int,
+}
+
+#[cfg(target_os = "macos")]
+impl HintWatcher {
+    pub fn new(dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(dir.as_os_str().as_bytes())?;
+        // SAFETY: path 是有效的以 NUL 结尾的字符串，open 不保留这个指针。
+        let dir_fd = unsafe { libc::open(path.as_ptr(), libc::O_EVTONLY | libc::O_CLOEXEC) };
+        if dir_fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: kqueue 没有参数；返回值在下面检查。
+        let kq = unsafe { libc::kqueue() };
+        if kq < 0 {
+            let e = std::io::Error::last_os_error();
+            // SAFETY: dir_fd 是上面刚打开、还没交出去的描述符，只关闭一次。
+            unsafe { libc::close(dir_fd) };
+            return Err(e);
+        }
+        let watcher = Self { kq, dir: dir_fd };
+        let change = libc::kevent {
+            ident: dir_fd as libc::uintptr_t,
+            filter: libc::EVFILT_VNODE,
+            flags: libc::EV_ADD | libc::EV_CLEAR,
+            fflags: libc::NOTE_WRITE,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        // SAFETY: kq 和 dir_fd 都有效；changelist 指向 1 个有效的 kevent，不取事件（eventlist 为空）。
+        let r = unsafe {
+            libc::kevent(
+                watcher.kq,
+                &change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if r < 0 {
+            // watcher 在这里被 drop，两个描述符都会关闭。
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(watcher)
+    }
+
+    /// 阻塞到目录发生变化（返回 true）或超时（返回 false）。被信号打断时返回 false。
+    pub fn wait(&self, timeout: Duration) -> bool {
+        let ts = libc::timespec {
+            tv_sec: libc::time_t::try_from(timeout.as_secs()).unwrap_or(libc::time_t::MAX),
+            tv_nsec: libc::c_long::from(timeout.subsec_nanos()),
+        };
+        // SAFETY: kevent 是纯数据结构，全零是合法值；内核只往里写。
+        let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+        // SAFETY: kq 有效；不提交变更，eventlist 指向 1 个可写的 kevent，ts 在调用期间有效。
+        let n = unsafe { libc::kevent(self.kq, std::ptr::null(), 0, &mut event, 1, &ts) };
+        n > 0
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for HintWatcher {
+    fn drop(&mut self) {
+        // SAFETY: 两个描述符都由这个结构独占，Drop 只执行一次。
+        unsafe {
+            libc::close(self.kq);
+            libc::close(self.dir);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl HintWatcher {
+    pub fn new(_dir: &Path) -> std::io::Result<Self> {
+        Ok(Self {})
+    }
+    /// 非 macOS 平台没有实现目录监视：按超时睡眠，返回 false。
+    pub fn wait(&self, timeout: Duration) -> bool {
+        std::thread::sleep(timeout);
+        false
+    }
+}
+
+/// 每次醒来读到提示后调用。提示只在值「变化」时才覆盖 `next`：服务如果持续写不进文件，
+/// 文件里会一直是一个过时的值，若每次都采用它，线程会每 ≤60 秒调用一次 take，服务永远无法空闲退出。
+/// 返回 true 表示连续多次读不到有效提示，需要主动 take（让服务重写文件）。
+pub fn adopt(
+    hint: Option<Option<i64>>,
+    last_hint: &mut Option<Option<i64>>,
+    next: &mut Option<i64>,
+    misses: &mut u8,
+) -> bool {
+    match hint {
+        Some(h) if Some(h) != *last_hint => {
+            *last_hint = Some(h);
+            *next = h;
+            *misses = 0;
+            false
+        }
+        Some(_) => {
+            *misses = 0;
+            false
+        }
+        None => {
+            *misses += 1;
+            if *misses >= HINT_MISSES {
+                *misses = 0;
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// 调度循环依赖的外部环境：时钟、等待、提示文件和 take。桌面进程用真实实现，测试用虚拟时钟。
+pub trait SchedulerEnv {
+    /// 当前 Unix 毫秒。
+    fn now_ms(&self) -> i64;
+    /// 阻塞到目录变化（true）或超时（false）；桌面实现里自带监视器降级和重建。
+    fn wait(&mut self, timeout: Duration) -> bool;
+    fn sleep(&mut self, d: Duration);
+    fn read_hint(&mut self) -> Option<Option<i64>>;
+    /// 调用 desktop_take_due_reminders 并发通知；返回 next_due_ms；Err = 服务不可用或解码失败。
+    /// 调度循环对所有错误的处理都一样（退避 60 秒），细节由实现自己记日志，所以 Err 不带内容。
+    #[allow(clippy::result_unit_err)]
+    fn take_and_notify(&mut self) -> std::result::Result<Option<i64>, ()>;
+    fn should_stop(&self) -> bool {
+        false
+    }
+}
+
+/// take 一次；返回的 next 仍已到期（单次最多处理 TAKE_LIMIT 条）时立即再取，
+/// 连续 5 次后暂停 1 秒。服务不可用时退避 60 秒。
+fn take(env: &mut impl SchedulerEnv) -> Option<i64> {
+    let mut burst = 0;
+    loop {
+        match env.take_and_notify() {
+            Err(()) => return Some(env.now_ms() + BACKOFF_MS),
+            Ok(next) if next.is_some_and(|t| t <= env.now_ms()) && !env.should_stop() => {
+                burst += 1;
+                if burst >= RETAKE_BURST {
+                    burst = 0;
+                    env.sleep(RETAKE_PAUSE);
+                }
+            }
+            Ok(next) => return next,
+        }
+    }
+}
+
+/// 桌面提醒线程的主循环：启动时先 take 一次（补发错过的提醒并拿到 next），
+/// 之后阻塞等待到 next（最长 60 秒）或提示文件变化，每次醒来重读提示，到期就 take。没有轮询。
+pub fn run_scheduler(env: &mut impl SchedulerEnv) {
+    let mut next = take(env);
+    let mut last_hint: Option<Option<i64>> = None;
+    let mut misses = 0;
+    while !env.should_stop() {
+        let wait = match next {
+            Some(t) => (t - env.now_ms()).clamp(0, MAX_WAIT_MS),
+            None => MAX_WAIT_MS,
+        };
+        if wait > 0 {
+            // wait 在 1..=60_000 之间，转换不会失败。
+            env.wait(Duration::from_millis(u64::try_from(wait).unwrap_or(0)));
+        }
+        let hint = env.read_hint();
+        if adopt(hint, &mut last_hint, &mut next, &mut misses) {
+            next = take(env);
+        }
+        if next.is_some_and(|t| t <= env.now_ms() + DUE_SLACK_MS) {
+            next = take(env);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +505,213 @@ mod tests {
         assert_eq!(plan[3].0, "还有 7 个提醒");
         assert_eq!(plan[3].1.chars().count(), 81);
         assert!(plan[3].1.ends_with('…'));
+    }
+
+    #[test]
+    fn adopt_only_takes_changed_hints() {
+        let (mut last, mut next, mut misses) = (None, Some(5), 0u8);
+        // 第一次读到的有效提示一定被采用
+        assert!(!adopt(Some(Some(100)), &mut last, &mut next, &mut misses));
+        assert_eq!((last, next), (Some(Some(100)), Some(100)));
+        // 值变化：采用（包括变成「没有提醒」）
+        assert!(!adopt(Some(None), &mut last, &mut next, &mut misses));
+        assert_eq!((last, next), (Some(None), None));
+        // 值不变：保留 take 给出的 next，过时的提示不会把 next 拉回去引起反复 take
+        next = Some(900);
+        assert!(!adopt(Some(None), &mut last, &mut next, &mut misses));
+        assert_eq!(next, Some(900));
+        // 连续 3 次读不到：要求 take，并把计数清零
+        assert!(!adopt(None, &mut last, &mut next, &mut misses));
+        assert!(!adopt(None, &mut last, &mut next, &mut misses));
+        assert_eq!(misses, 2);
+        assert!(adopt(None, &mut last, &mut next, &mut misses));
+        assert_eq!(misses, 0);
+        assert_eq!(next, Some(900));
+        // 读到有效值（哪怕没变）也会清零
+        assert!(!adopt(None, &mut last, &mut next, &mut misses));
+        assert!(!adopt(Some(None), &mut last, &mut next, &mut misses));
+        assert_eq!(misses, 0);
+    }
+
+    #[test]
+    fn read_hint_rejects_missing_invalid_and_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_hint(dir.path()), None);
+        let write = |s: &str| std::fs::write(dir.path().join(HINT_FILE), s).unwrap();
+        write(r#"{"v":1,"next_due_ms":1760922000000}"#);
+        assert_eq!(read_hint(dir.path()), Some(Some(1_760_922_000_000)));
+        write(r#"{"v":1,"next_due_ms":null}"#);
+        assert_eq!(read_hint(dir.path()), Some(None));
+        for bad in [
+            "",
+            "garbage",
+            r#"{"v":2,"next_due_ms":null}"#,
+            r#"{"v":1,"next_due_ms":"x"}"#,
+            r#"{"v":1,"next_due_ms":null,"x":1}"#,
+        ] {
+            write(bad);
+            assert_eq!(read_hint(dir.path()), None, "{bad}");
+        }
+        // 超过 4 KiB 的部分不读，截断后的 JSON 无效
+        write(&format!(
+            r#"{{"v":1,"next_due_ms":null{}}}"#,
+            " ".repeat(5000)
+        ));
+        assert_eq!(read_hint(dir.path()), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hint_watcher_wakes_on_rename_and_times_out_otherwise() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let watcher = HintWatcher::new(dir.path()).unwrap();
+        // 没有写入：超时返回 false
+        let started = Instant::now();
+        assert!(!watcher.wait(Duration::from_millis(200)));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        // 另一个线程以 tmp + rename 写提示文件：1 秒内醒来
+        let path = dir.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let tmp = path.join(format!("{HINT_FILE}.tmp"));
+            std::fs::write(&tmp, r#"{"v":1,"next_due_ms":null}"#).unwrap();
+            std::fs::rename(&tmp, path.join(HINT_FILE)).unwrap();
+        });
+        let started = Instant::now();
+        assert!(watcher.wait(Duration::from_secs(5)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        writer.join().unwrap();
+        assert_eq!(read_hint(dir.path()), Some(None));
+        assert!(HintWatcher::new(&dir.path().join("missing")).is_err());
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Ev {
+        Take,
+        Sleep,
+    }
+
+    /// 虚拟环境：wait / sleep 只推进虚拟时钟；take 模拟服务（取走到期的提醒、返回下一个）。
+    struct FakeEnv {
+        now: i64,
+        end: i64,
+        pending: Vec<i64>,
+        /// 每次通知时的 (虚拟 now, 提醒时刻)
+        fired: Vec<(i64, i64)>,
+        waits: Vec<Duration>,
+        events: Vec<Ev>,
+        take_result: Option<std::result::Result<Option<i64>, ()>>,
+        /// 模拟提示文件不存在（服务从没运行起来）。
+        hint_missing: bool,
+    }
+
+    impl FakeEnv {
+        fn new(end: i64, pending: Vec<i64>) -> Self {
+            Self {
+                now: 0,
+                end,
+                pending,
+                fired: vec![],
+                waits: vec![],
+                events: vec![],
+                take_result: None,
+                hint_missing: false,
+            }
+        }
+        fn takes(&self) -> usize {
+            self.events.iter().filter(|e| **e == Ev::Take).count()
+        }
+        fn next(&self) -> Option<i64> {
+            self.pending.iter().copied().min()
+        }
+    }
+
+    impl SchedulerEnv for FakeEnv {
+        fn now_ms(&self) -> i64 {
+            self.now
+        }
+        fn wait(&mut self, timeout: Duration) -> bool {
+            self.waits.push(timeout);
+            self.now += i64::try_from(timeout.as_millis()).unwrap();
+            false
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.events.push(Ev::Sleep);
+            self.now += i64::try_from(d.as_millis()).unwrap();
+        }
+        fn read_hint(&mut self) -> Option<Option<i64>> {
+            (!self.hint_missing).then(|| self.next())
+        }
+        fn take_and_notify(&mut self) -> std::result::Result<Option<i64>, ()> {
+            self.events.push(Ev::Take);
+            if let Some(r) = self.take_result {
+                return r.map(|n| n.map(|_| self.now));
+            }
+            let now = self.now;
+            let (due, rest): (Vec<i64>, Vec<i64>) =
+                self.pending.iter().partition(|&&t| t <= now + 999);
+            self.fired.extend(due.into_iter().map(|t| (now, t)));
+            self.pending = rest;
+            Ok(self.next())
+        }
+        fn should_stop(&self) -> bool {
+            self.now >= self.end
+        }
+    }
+
+    const MIN: i64 = 60_000;
+
+    #[test]
+    fn scheduler_fires_once_without_busy_looping() {
+        let due = 10 * MIN + 123;
+        let mut env = FakeEnv::new(120 * MIN, vec![due]);
+        run_scheduler(&mut env);
+        // 启动一次、到点一次
+        assert_eq!(env.takes(), 2, "{:?}", env.events);
+        assert_eq!(env.fired.len(), 1);
+        let (at, t) = env.fired[0];
+        assert!((at - t).abs() <= 1000, "fired at {at}, due {t}");
+        assert!(env.waits.iter().all(|w| !w.is_zero()));
+        assert!(env.waits.len() <= 121, "{}", env.waits.len());
+    }
+
+    #[test]
+    fn scheduler_without_reminders_waits_a_minute_at_a_time() {
+        let mut env = FakeEnv::new(120 * MIN, vec![]);
+        run_scheduler(&mut env);
+        assert_eq!(env.takes(), 1);
+        assert!(env.waits.len() <= 121, "{}", env.waits.len());
+        assert!(env.waits.iter().all(|w| *w == Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn scheduler_backs_off_a_minute_while_the_service_fails() {
+        let mut env = FakeEnv::new(30 * MIN, vec![]);
+        env.take_result = Some(Err(()));
+        env.hint_missing = true;
+        run_scheduler(&mut env);
+        assert!(env.waits.iter().all(|w| *w == Duration::from_secs(60)));
+        // 每分钟重试一次，加上启动那次
+        assert_eq!(env.takes(), env.waits.len() + 1);
+        assert!(!env.events.contains(&Ev::Sleep));
+    }
+
+    #[test]
+    fn scheduler_pauses_after_five_already_due_takes() {
+        let mut env = FakeEnv::new(3000, vec![]);
+        // 每次 take 都说「下一个就是现在」
+        env.take_result = Some(Ok(Some(0)));
+        run_scheduler(&mut env);
+        let expected: Vec<Ev> = [Ev::Take; 5]
+            .into_iter()
+            .chain([Ev::Sleep])
+            .cycle()
+            .take(env.events.len())
+            .collect();
+        assert_eq!(env.events, expected);
+        assert_eq!(env.events.iter().filter(|e| **e == Ev::Sleep).count(), 3);
+        assert!(env.waits.is_empty());
     }
 
     #[test]
