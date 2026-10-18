@@ -175,6 +175,7 @@ export function CalendarView({
           grid={grid}
           month={month}
           today={context.today}
+          timeZone={context.calendar_timezone}
           selected={selected}
           weekStart={weekStart}
           itemsByDate={itemsByDate}
@@ -200,6 +201,7 @@ export function CalendarView({
       <DayPanel
         date={selected}
         today={context.today}
+        timeZone={context.calendar_timezone}
         items={itemsByDate.get(selected) ?? []}
         day={days.get(selected) ?? dayInfo(selected, cal.dayMarks.get(selected), holidays)}
         onMark={(value) => void cal.setDayMark(selected, value)}

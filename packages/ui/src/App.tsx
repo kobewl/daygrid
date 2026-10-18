@@ -330,6 +330,7 @@ function Shell() {
           key={dialog.mode === "edit" ? dialog.item.id : "new-" + dialog.date}
           target={dialog}
           team={linked && sync.status?.config ? { role: sync.status.config.role } : null}
+          timeZone={cal.context.calendar_timezone}
           onSave={actions.save}
           onToggle={actions.toggle}
           onDelete={actions.remove}

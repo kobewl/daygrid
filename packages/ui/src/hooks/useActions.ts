@@ -3,6 +3,7 @@ import type { Item, Visibility } from "../api";
 import type { Draft } from "../components/ItemDialog";
 import { dayTitle } from "../lib/dates";
 import { automaticColor } from "../lib/itemColor";
+import { joinReminder } from "../lib/reminder";
 import { rememberVisibility } from "../lib/visibility";
 import type { Calendar } from "./useCalendar";
 import { useNotify } from "./useToasts";
@@ -84,6 +85,15 @@ export function useActions(cal: Calendar) {
   /** 对话框保存：失败时抛出，让对话框处理版本冲突并保留草稿。 */
   const save = useCallback(
     async (draft: Draft) => {
+      // 对话框已拦下不完整的提醒，这里只会是本地串或 null。
+      const remindAt = joinReminder(draft.reminder) ?? null;
+      // 只读成员编辑共享事项：请求里只带 remind_at（服务端只对这种修改放行）。
+      if (draft.id && draft.reminderOnly) {
+        if (!draft.remindTouched) return;
+        await cal.updateItem(draft.id, { remind_at: remindAt }, { revision: draft.revision });
+        notify("已保存");
+        return;
+      }
       const fields = {
         date: draft.date,
         title: draft.title,
@@ -92,7 +102,12 @@ export function useActions(cal: Calendar) {
       };
       if (draft.visibility) rememberVisibility(draft.visibility);
       if (draft.id) {
-        await cal.updateItem(draft.id, fields, { revision: draft.revision });
+        // 没动过提醒就不传：只改日期时由服务端按同样的天数平移。
+        await cal.updateItem(
+          draft.id,
+          { ...fields, ...(draft.remindTouched ? { remind_at: remindAt } : {}) },
+          { revision: draft.revision },
+        );
         // 可见范围是单独的写入口（它还要通知同步引擎撤回 / 上传）；改了才调用。
         if (draft.visibility && draft.visibility !== draft.originalVisibility)
           await cal.setVisibility(draft.id, draft.visibility);
@@ -100,6 +115,7 @@ export function useActions(cal: Calendar) {
         await cal.createItem({
           ...fields,
           ...(draft.visibility ? { visibility: draft.visibility } : {}),
+          ...(remindAt ? { remind_at: remindAt } : {}),
         });
       }
       cal.goDate(draft.date);

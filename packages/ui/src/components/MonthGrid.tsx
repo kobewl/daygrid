@@ -6,13 +6,17 @@ import {
   weekdayNames,
   type WeekStart,
 } from "../lib/dates";
+import { isPast, toInput, zhDateTime } from "../lib/reminder";
 import { cx } from "../lib/util";
+import { Icon } from "./icons";
 import { kindLabel, type DayInfo, type DayKind } from "../lib/workday";
 
 type CellProps = {
   date: string;
   month: string;
   today: string;
+  /** 日历时区：只给未过的提醒显示铃铛。 */
+  timeZone: string;
   selected: boolean;
   dropping: boolean;
   items: Item[] | undefined;
@@ -111,39 +115,45 @@ const Cell = memo(function Cell(p: CellProps) {
         )}
       </div>
       <div className="chips">
-        {list.slice(0, shown).map((item) => (
-          <button
-            key={item.id}
-            className={cx(
-              "chip",
-              `c-${item.color}`,
-              item.status === "done" && "done",
-              p.dragId === item.id && "dragging",
-              p.settledId === item.id && "settle",
-              p.fresh.has(item.id) && "arrive",
-            )}
-            draggable
-            title={item.title}
-            onClick={(e) => {
-              e.stopPropagation();
-              p.onSelect(p.date);
-              p.onOpen(item);
-            }}
-            onDoubleClick={(e) => e.stopPropagation()}
-            onDragStart={(e) => {
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", item.id);
-              p.onDragItem(item.id, p.date);
-            }}
-            onDragEnd={() => {
-              p.onDragItem(undefined);
-              p.onDropTarget(undefined);
-            }}
-          >
-            <span className="chip-status" aria-hidden="true" />
-            <span className="chip-title">{item.title}</span>
-          </button>
-        ))}
+        {list.slice(0, shown).map((item) => {
+          // 只有未完成事项的未来提醒才显示铃铛（已完成或已过的不会再触发）。
+          const local = toInput(item.remind_at);
+          const bell = !!local && item.status === "planned" && !isPast(local, p.timeZone);
+          return (
+            <button
+              key={item.id}
+              className={cx(
+                "chip",
+                `c-${item.color}`,
+                item.status === "done" && "done",
+                p.dragId === item.id && "dragging",
+                p.settledId === item.id && "settle",
+                p.fresh.has(item.id) && "arrive",
+              )}
+              draggable
+              title={bell ? `${item.title} · 提醒 ${zhDateTime(local!)}` : item.title}
+              onClick={(e) => {
+                e.stopPropagation();
+                p.onSelect(p.date);
+                p.onOpen(item);
+              }}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", item.id);
+                p.onDragItem(item.id, p.date);
+              }}
+              onDragEnd={() => {
+                p.onDragItem(undefined);
+                p.onDropTarget(undefined);
+              }}
+            >
+              <span className="chip-status" aria-hidden="true" />
+              <span className="chip-title">{item.title}</span>
+              {bell && <Icon name="bell" size={9} className="chip-bell" aria-hidden />}
+            </button>
+          );
+        })}
         {hidden > 0 && !p.compact && (
           <button
             type="button"
@@ -169,6 +179,7 @@ export function MonthGrid({
   grid,
   month,
   today,
+  timeZone,
   selected,
   weekStart,
   itemsByDate,
@@ -183,6 +194,7 @@ export function MonthGrid({
   grid: string[];
   month: string;
   today: string;
+  timeZone: string;
   selected: string;
   weekStart: WeekStart;
   itemsByDate: Map<string, Item[]>;
@@ -316,6 +328,7 @@ export function MonthGrid({
             date={date}
             month={month}
             today={today}
+            timeZone={timeZone}
             selected={date === selected}
             dropping={date === dropDate}
             items={itemsByDate.get(date)}

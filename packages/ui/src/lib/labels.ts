@@ -1,5 +1,6 @@
 import type { Connection, History, Item } from "../api";
 import { colorName } from "../api";
+import { sameRemindAt, toInput, zhDateTime } from "./reminder";
 
 export const ACTION_LABEL: Record<string, string> = {
   create: "创建",
@@ -63,12 +64,14 @@ export function conflictValue(field: string, value: string | null) {
 const FIELD: [keyof Item, string][] = [
   ["title", "标题"],
   ["date", "日期"],
+  ["remind_at", "提醒"],
   ["notes", "备注"],
   ["color", "颜色"],
   ["status", "状态"],
   ["visibility", "可见范围"],
 ];
 const show = (field: keyof Item, v: unknown) => {
+  if (field === "remind_at") return v == null ? "不提醒" : zhDateTime(toInput(String(v))!);
   const s = String(v ?? "");
   if (field === "color") return colorName(s);
   if (field === "status") return s === "done" ? "已完成" : "未完成";
@@ -80,7 +83,10 @@ const show = (field: keyof Item, v: unknown) => {
 /** 两个版本之间发生变化的字段（修改记录与确认请求共用）。 */
 export function diffItems(before: Item | null, after: Item) {
   if (!before) return [];
-  return FIELD.filter(([f]) => before[f] !== after[f]).map(([f, label]) => ({
+  // 旧记录里没有 remind_at（undefined），新记录里是 null：都算「不提醒」，不当成一次修改。
+  const changed = (f: keyof Item) =>
+    f === "remind_at" ? !sameRemindAt(before.remind_at, after.remind_at) : before[f] !== after[f];
+  return FIELD.filter(([f]) => changed(f)).map(([f, label]) => ({
     label,
     from: show(f, before[f]),
     to: show(f, after[f]),

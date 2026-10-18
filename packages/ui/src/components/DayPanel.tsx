@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Item, SyncPeer } from "../api";
 import { addDays, dayTitle, weekdayLong } from "../lib/dates";
+import { isPast, reminderLabel, toInput } from "../lib/reminder";
 import { cx } from "../lib/util";
 import { kindLabel, type DayInfo, type MarkValue } from "../lib/workday";
 import { Avatars } from "./Avatars";
@@ -8,9 +9,28 @@ import { Icon } from "./icons";
 import { firstNoteLine, Markdown } from "./Markdown";
 import { Segmented } from "./Segmented";
 
+/** 事项行上的提醒角标。「已过」只在渲染时判断，不为它挂计时器。 */
+function RemindBadge({ item, timeZone }: { item: Item; timeZone: string }) {
+  const local = toInput(item.remind_at);
+  if (!local) return null;
+  const { label, full: base } = reminderLabel(local, item.date);
+  const done = item.status === "done";
+  const muted = done || isPast(local, timeZone);
+  // 已完成事项的提醒行已删除，不会触发。
+  const full = done ? `${base}（已完成，不提醒）` : base;
+  return (
+    <span className={cx("remind-badge", muted && "past")} title={full}>
+      <Icon name="bell" size={11} />
+      <span aria-hidden="true">{label}</span>
+      <span className="sr-only">{full}</span>
+    </span>
+  );
+}
+
 export function DayPanel({
   date,
   today,
+  timeZone,
   items,
   day,
   fresh,
@@ -29,6 +49,8 @@ export function DayPanel({
   teamMode: boolean;
   date: string;
   today: string;
+  /** 日历时区：判断提醒是否已过。 */
+  timeZone: string;
   items: Item[];
   /** 这一天是休息日还是工作日，以及原因。 */
   day: DayInfo;
@@ -190,6 +212,7 @@ export function DayPanel({
                 <button type="button" className="row-title">
                   {item.title}
                 </button>
+                <RemindBadge item={item} timeZone={timeZone} />
                 {teamMode && item.visibility === "private" && (
                   <span className="vis-badge" title="仅自己可见：不会上传，同事看不到">
                     <Icon name="lock" size={11} /> 仅自己

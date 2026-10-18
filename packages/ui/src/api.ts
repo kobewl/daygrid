@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { nowInZone, shiftReminder, toInput } from "./lib/reminder";
 
 export type Item = {
   id: string;
@@ -12,6 +13,8 @@ export type Item = {
   updated_at: string;
   /** private：只在这台电脑上，永远不会上传；shared：团队日历里所有成员可见。 */
   visibility: Visibility;
+  /** 本机提醒，日历时区的规范串（如 2026-10-20T09:00:00+08:00）；null = 不提醒。旧的修改记录里没有这个字段。 */
+  remind_at?: string | null;
 };
 export type Visibility = "private" | "shared";
 export type DayMark = { date: string; kind: "rest" | "work" };
@@ -24,6 +27,8 @@ export type Context = {
   change_sequence: number;
   approval_mode: ApprovalMode;
   service_version: string;
+  /** 日历时区的当前时间（YYYY-MM-DDTHH:MM:SS±HH:MM）。 */
+  now?: string;
 };
 export type History = {
   sequence: number;
@@ -264,7 +269,16 @@ const mk = (
   created_at: ago(5000 - items0.length * 7),
   updated_at: ago(5000 - items0.length * 7),
   visibility: "private",
+  remind_at: null,
 });
+// 预览里的提醒：把界面传来的本地串（YYYY-MM-DDTHH:MM）补成带浏览器当前偏移的规范串。
+const offset = () => {
+  const minutes = -new Date().getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  return `${minutes < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+};
+const normalizeRemind = (v: unknown): string | null =>
+  typeof v !== "string" ? null : v.length === 16 ? `${v}:00${offset()}` : v;
 const items0: Item[] = [];
 if (preview) {
   [
@@ -500,6 +514,7 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
         change_sequence: sequence,
         approval_mode: approvalMode,
         service_version: "preview",
+        now: `${nowInZone(Intl.DateTimeFormat().resolvedOptions().timeZone)}:${pad(new Date().getSeconds())}${offset()}`,
       };
     case "daygrid_list_items":
       return {
@@ -529,6 +544,7 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
         created_at: now,
         updated_at: now,
         visibility: a.visibility ?? "private",
+        remind_at: normalizeRemind(a.remind_at),
       };
       if (item.visibility === "shared" && !sync.linked)
         fail("VALIDATION_ERROR", "还没有连接团队日历，事项只保存在本机。");
@@ -548,7 +564,12 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
       const before = { ...item };
       let action = "delete";
       if (method === "daygrid_update_item") {
-        Object.assign(item, a.patch);
+        const patch = { ...a.patch };
+        if ("remind_at" in patch) patch.remind_at = normalizeRemind(patch.remind_at);
+        else if (patch.date && patch.date !== item.date && item.remind_at)
+          // 只改日期：提醒按同样的天数平移，与服务端一致。
+          patch.remind_at = normalizeRemind(shiftReminder(toInput(item.remind_at)!, item.date, patch.date));
+        Object.assign(item, patch);
         action = "update";
       } else if (method === "daygrid_set_item_status") {
         item.status = a.status;

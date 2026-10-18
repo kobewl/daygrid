@@ -33,7 +33,33 @@ MCP stdio 桥接 ─┘
 - **可见性**：`Item.visibility`（`private` 默认 / `shared`）只存在本机事项 JSON 里，私有事项从不产生操作。`desktop_set_visibility`（仅桌面通道）：共享 → 私有 = 服务端软删除并保留本地副本，私有 → 共享 = Restore + 差异 Update。MCP 创建的事项恒为私有。
 - **团队切换**：`sync_last_team`（`url|workspace`）变化时所有事项转私有、丢弃快照与冲突，并把曾经共享过的事项排除在 `share_existing` 之外；同一团队重连则保留快照并对账离线期间的编辑与删除。
 - **角色**：owner / editor / viewer 随 `PullResponse.role` 到达；降级为 viewer 时丢弃出箱并记为 `read_only` 冲突、回滚本地；viewer 仍可写私有事项。
-- **已知限制**：SSE 的 30 秒令牌复核已实现但没有端到端测试；`contract_version` 未变化（MCP 契约无改动）。
+- **已知限制**：SSE 的 30 秒令牌复核已实现但没有端到端测试。多人协同本身没有改动 MCP 契约；同一版本里的「提醒」把 `contract_version` 升到 `0.3`（见下一节）。
+
+## 提醒（Unreleased，schema v5）
+
+```text
+界面 / MCP / 同步线程 ─IPC─▶ daygrid-service / Store ──同一事务──▶ items.body.remind_at + reminders 表
+                                        │ 每次调用后：最早待触发时间变了才写
+                                        ▼
+                             <data_dir>/reminders.next   {"v":1,"next_due_ms":…}
+                                        │ kqueue（目录 NOTE_WRITE），超时 ≤ 60 s
+                                        ▼
+                 桌面进程 · reminders 线程 ──到点──▶ desktop_take_due_reminders ──▶ macOS 通知横幅
+```
+
+- **数据表示**：`remind_at` 是事项 JSON 里的普通字段，唯一真值。规范形式 `YYYY-MM-DDTHH:MM:00±HH:MM`，偏移取日历时区在该时刻的偏移，分钟精度；`null` 表示不提醒。字符串没有歧义，前 16 位就是日历时区的墙上时间，界面不用做时区换算。输入接受日历时区的本地串（`YYYY-MM-DDTHH:MM`，可带秒，`T` / `t` / 空格分隔）或带 `Z` / `±HH:MM` 的 RFC 3339；秒舍去；夏令时回拨取较早的时刻，跳过的时段报错。直接写入时不能早于当前 60 秒以上；批准确认请求时不再检查，过期的提醒直接作废。
+- **不进入团队同步**：同步层的结构体都是 `deny_unknown_fields`，把它加进 `sync::FIELDS` 会让旧客户端整体同步失败；而且提醒本来就是个人设置（同事设的 8 点提醒不该在我这里弹），「是否已触发」也只能按设备记。所以它和 `visibility` 一样只存在本机：`reconcile_item` 只比较 `FIELDS`，改提醒不产生 outbox 操作。同事改了共享事项的日期时，`rebuild_local` 把提醒按同样的天数平移（时刻不变），同样不产生 outbox；同事删除事项时删掉提醒行。只读成员可以只改提醒（`ItemFields` 和 `visibility` 不变时放行）。
+- **`reminders` 表的不变量**：`reminders(item_id, due_ms, fired_at)` 是派生索引。一个事项在表里有一行，当且仅当它未完成、未删除、有提醒，且 `due_ms` 等于 `remind_at` 的毫秒时刻。所有写入路径（`apply`、`rebuild_local`、迁移 backfill）都在同一事务里调用 `sync_row` 维护它。时刻没变时保留 `fired_at`（只触发一次）；时刻变了、重新打开或恢复时重新生效，但新时刻早于「现在 − 60 秒」就直接标记作废，不补发。下一个提醒用部分索引 `reminders_pending` 查 `MIN(due_ms)`，O(log n)。
+- **唤醒链路**：服务在每次调用结束时求一次最早待触发时间，只有值变了才原子改写 `reminders.next`（tmp + rename，0600，只含时间戳）。桌面线程用 kqueue 监视数据目录，超时取「到下次触发的剩余时间」和 60 秒中较小的那个；目录一变就醒来读提示，值变了才采用。到点后调用 `desktop_take_due_reminders`（只限桌面通道）：服务在一个事务里先标记 `fired_at` 再返回（最多 200 条），所以每个提醒最多触发一次；24 小时内错过的补发并标「错过的提醒 · 」，更早的静默作废。同一批超过 3 个时，最早的 3 个各发一条，其余合并成「还有 N 个提醒」。
+- **为什么由桌面进程触发**：服务按需启动、空闲 5 分钟退出，而且没有 bundle 身份；MCP 桥接可能有多个也可能没有。只有桌面主进程在应用运行期间一直存在，并且能以「日格」的身份发通知。桌面进程也不直接读 SQLite：服务仍是唯一访问数据库的进程，提示文件只是一个时间戳。
+- **关窗改为隐藏**：macOS 上关闭主窗口（红灯 / ⌘W）只隐藏窗口，点程序坞图标（`RunEvent::Reopen`）重新显示；⌘Q 才退出。隐藏时外壳发 `daygrid://window-hidden`，界面停掉 2 秒一次的 `desktop_pulse` 和跨日计时器，不挂任何周期计时器；`daygrid://window-shown` 或窗口获得焦点时立即刷新一次。这样隐藏后服务仍能照常空闲退出。代价：隐藏期间新的待确认请求不会让程序坞图标跳动，重新显示窗口后才出现。
+- **性能取舍**：没有按秒轮询；空闲时只有一个名为 `reminders` 的线程阻塞在 `kevent` 上。60 秒的超时上限用来兜底系统睡眠唤醒、改系统时钟和提示文件丢失的情况（最多 60 秒内补上）；数据目录里其他文件的变化也会唤醒它，代价只是读一次不到 100 字节的文件。窗口隐藏时保留 App Nap（不关 App Nap、不常驻 activity），计时器可能被系统推迟。设计里的回退方案（提前 5 分钟开始一个短时 activity）**这次没有实现**，要等在打包应用上实测推迟时间后再决定（见 `docs/verification.md`）。实测的空闲 CPU、内存和线程开销也还没有记录。性能基线：1 万条事项、1 千个提醒时，`next_reminder_due` 和一次取满 200 条的 `take_due` 都在测试阈值内（1 ms / 10 ms）。
+- **点击通知的限制**：`tauri-plugin-notification` 在桌面平台上没有点击回调。点击通知时系统会激活日格，但如果没有触发 `Reopen`，隐藏的窗口不会自动出现，需要再点一次程序坞图标。
+- **投递无法检测**：插件在 macOS 上不反馈投递结果（`show()` 吞掉错误），通知是 at-most-once，丢了不重发。设置页「发送测试通知」成功只代表请求已发出，看不到时引导用户去「系统设置 › 通知 › 日格」检查。
+- **前台也弹横幅**：日格是活跃应用时，macOS 默认不弹 NSUserNotification 横幅。启动时给 mac-notification-sys 的 `NotificationCenterDelegate` 类补上 `userNotificationCenter:shouldPresentNotification:`（固定返回 YES，只新增、不替换），所以窗口可见、⌘W 隐藏后没切走、在后台三种状态都弹横幅并播放默认提示音。桌面测试会检查这个类仍然存在。
+- **锁定通知依赖版本**：`tauri-plugin-notification =2.4.0`，并用 `cargo update --precise` 把 `notify-rust` 锁在 4.18.0、`mac-notification-sys` 锁在 0.6.15。「`show()` 吞错」「默认提示音参数」「delegate 类名」都依赖这几个版本的源码行为，升级任何一个都要重新核对，并跑类名测试。
+- **契约 0.3**：`daygrid_create_item` / `daygrid_update_item.patch` 接受 `remind_at`（patch 里 `null` 清除、不传不变，只改日期时平移）；所有返回事项的工具都带 `remind_at`（升级前写下的回执和确认结果重放时补 `null`）；新增只读工具 `daygrid_list_reminders`（共 10 个工具）；`daygrid_get_context` 新增 `now`（日历时区，带秒）。`contracts/item.schema.json` 也由代码生成（`$id` 为 `urn:daygrid:item:2`）。
+- **Schema v5**：新增 `reminders` 表。迁移前生成并校验 `calendar.db.pre-v5.bak`，备份失败或 backfill 失败时版本号不变。0.4.0（v3）会一步升到 v5。
 
 ## 0.4.0：休息日标记与备注链接
 
