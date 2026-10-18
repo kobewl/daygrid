@@ -142,6 +142,53 @@ impl Store {
         }
     }
 
+    /// MCP `daygrid_list_reminders`：未来 `within_days` 天内尚未触发的提醒，按时间排序。
+    /// 下界是 now − 60 s，与写入时的容差一致：60 秒以内的仍会触发，所以照样列出。
+    pub(super) fn list_reminders(&self, args: &Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            within_days: Option<i64>,
+            limit: Option<i64>,
+        }
+        let a: Args = domain::decode(args)?;
+        let days = a.within_days.unwrap_or(7);
+        let limit = a.limit.unwrap_or(50);
+        if !(1..=366).contains(&days) || !(1..=100).contains(&limit) {
+            return Err(Error::new("VALIDATION_ERROR", "范围或数量无效。"));
+        }
+        let tz = self.calendar_tz()?;
+        let now = Utc::now();
+        let now_ms = now.timestamp_millis();
+        let mut stmt = self.db.prepare_cached(
+            "SELECT i.body FROM reminders r JOIN items i ON i.id=r.item_id WHERE r.fired_at IS NULL AND r.due_ms BETWEEN ?1 AND ?2 AND i.deleted_at IS NULL AND i.status='planned' ORDER BY r.due_ms,r.item_id LIMIT ?3",
+        )?;
+        let bodies: Vec<String> = stmt
+            .query_map(
+                params![
+                    now_ms - reminder::PAST_TOLERANCE_MS,
+                    now_ms + days * 86_400_000,
+                    limit + 1
+                ],
+                |r| r.get(0),
+            )?
+            .collect::<std::result::Result<_, _>>()?;
+        let has_more = bodies.len() as i64 > limit;
+        let items = bodies
+            .iter()
+            .take(limit as usize)
+            .map(|b| {
+                serde_json::from_str::<Item>(b)
+                    .map_err(|_| Error::new("STORAGE_ERROR", "事项数据无法读取。"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(success(json!({
+            "items":items,
+            "has_more":has_more,
+            "now":domain::canonical_now(tz, now)
+        })))
+    }
+
     /// 取出到期的提醒并标记为已触发（最多一次）。`now` 由调用方注入，便于测试。
     /// 24 小时以内的返回给桌面进程通知；更早的、以及不满足资格的只计入 `skipped`。
     pub fn take_due_reminders_at(&mut self, now: DateTime<Utc>) -> Result<Value> {

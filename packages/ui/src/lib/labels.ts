@@ -15,6 +15,7 @@ export const VISIBILITY_LABEL = { private: "仅自己可见", shared: "所有人
 export const TOOL_LABEL: Record<string, string> = {
   daygrid_get_context: "读取上下文",
   daygrid_list_items: "查询事项",
+  daygrid_list_reminders: "查询提醒",
   daygrid_get_item: "读取事项",
   daygrid_month_overview: "读取概览",
   daygrid_get_proposal: "查询确认结果",

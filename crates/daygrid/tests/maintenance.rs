@@ -408,7 +408,42 @@ fn contracts_are_in_sync_with_the_code() {
             assert!(!t[field].is_null(), "{} 缺少 {field}", t["name"]);
         }
     }
-    assert_eq!(generated["tools"].as_array().unwrap().len(), 9);
+    assert_eq!(generated["tools"].as_array().unwrap().len(), 10);
+}
+
+#[test]
+fn item_schema_is_in_sync_with_the_code() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/item.schema.json");
+    let mut generated = json!({
+        "$schema":"https://json-schema.org/draft/2020-12/schema",
+        "$id":"urn:daygrid:item:2"
+    });
+    for (k, v) in tools::item_schema().as_object().unwrap() {
+        generated[k] = v.clone();
+    }
+    if std::env::var_os("UPDATE_CONTRACTS").is_some() {
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&generated).unwrap()),
+        )
+        .unwrap();
+    }
+    let on_disk: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        on_disk, generated,
+        "contracts/item.schema.json 与代码不一致。运行 `UPDATE_CONTRACTS=1 cargo test -p daygrid --test maintenance` 重新生成。"
+    );
+    let required: Vec<&str> = generated["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for field in ["remind_at", "visibility"] {
+        assert!(required.contains(&field), "缺少 {field}");
+        assert!(generated["properties"][field].is_object(), "缺少 {field}");
+    }
 }
 
 /// 性能基线：1 万条事项。阈值刻意放宽（CI 机器抖动），目的是拦住数量级退化，

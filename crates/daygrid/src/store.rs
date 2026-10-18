@@ -31,9 +31,10 @@ const ACTIVITY_KEEP: i64 = 2000;
 const BACKUPS_KEEP: usize = 10;
 pub const APPROVAL_MODES: [&str; 2] = ["deletes", "all_writes"];
 
-const READ_METHODS: [&str; 5] = [
+const READ_METHODS: [&str; 6] = [
     "daygrid_get_context",
     "daygrid_list_items",
+    "daygrid_list_reminders",
     "daygrid_get_item",
     "daygrid_month_overview",
     "daygrid_get_proposal",
@@ -205,7 +206,11 @@ impl ProposalRow {
             "created_at":self.created_at,"expires_at":self.expires_at,"decided_at":self.decided_at,
         });
         match (&outcome, self.state.as_str()) {
-            (Some(o), "approved") => v["result"] = o["data"].clone(),
+            (Some(o), "approved") => {
+                let mut o = o.clone();
+                with_remind_at(&mut o);
+                v["result"] = o.get_mut("data").map_or(Value::Null, Value::take);
+            }
             (Some(o), "failed") => v["error"] = o["error"].clone(),
             _ => {}
         }
@@ -474,6 +479,7 @@ impl Store {
         match method {
             "daygrid_get_context" => self.context(&args),
             "daygrid_list_items" => self.list(args),
+            "daygrid_list_reminders" => self.list_reminders(&args),
             "daygrid_get_item" => {
                 let a: domain::Get = domain::decode(&args)?;
                 domain::uuid(&a.item_id)?;
@@ -559,9 +565,11 @@ impl Store {
         let tz = timezone
             .parse::<chrono_tz::Tz>()
             .map_err(|_| Error::new("STORAGE_ERROR", "日历时区无效。"))?;
-        let now = Utc::now().with_timezone(&tz);
+        let utc_now = Utc::now();
+        let now = utc_now.with_timezone(&tz);
         Ok(success(json!({
             "today":now.format("%Y-%m-%d").to_string(),
+            "now":domain::canonical_now(tz, utc_now),
             "weekday":now.weekday().to_string(),
             "week_starts_on":"monday",
             "calendar_timezone":timezone,
@@ -1132,6 +1140,7 @@ impl Store {
             let mut value: Value = serde_json::from_str(&body)
                 .map_err(|_| Error::new("STORAGE_ERROR", "回执无法读取。"))?;
             value["replayed"] = json!(true);
+            with_remind_at(&mut value);
             return Ok(Pre::Replay(value));
         }
         Ok(Pre::Go {
@@ -1587,6 +1596,13 @@ impl Store {
     }
 }
 
+/// 升级前写下的回执 / 确认结果里的事项没有 remind_at；按新 schema 补成 null。
+fn with_remind_at(v: &mut Value) {
+    if let Some(item) = v.pointer_mut("/data/item").and_then(Value::as_object_mut) {
+        item.entry("remind_at").or_insert(Value::Null);
+    }
+}
+
 /// 确认摘要里的提醒部分：`None` = 没涉及提醒；`Some(None)` = 取消；`Some(Some(t))` = 设置。
 fn reminder_note(remind_at: Option<Option<&str>>) -> String {
     match remind_at {
@@ -1619,6 +1635,10 @@ fn activity_summary(method: &str, args: &Value, value: &Value) -> String {
             args["from_date"].as_str().unwrap_or("?"),
             args["to_date"].as_str().unwrap_or("?"),
             data["total_items"]
+        ),
+        "daygrid_list_reminders" => format!(
+            "查询提醒，{} 条",
+            data["items"].as_array().map_or(0, Vec::len)
         ),
         "daygrid_get_item" => format!("读取事项「{}」", title(data)),
         "daygrid_get_proposal" => format!(
@@ -1653,6 +1673,7 @@ fn tool_label(method: &str) -> &'static str {
     match method {
         "daygrid_get_context" => "读取上下文",
         "daygrid_list_items" => "查询事项",
+        "daygrid_list_reminders" => "查询提醒",
         "daygrid_get_item" => "读取事项",
         "daygrid_month_overview" => "读取概览",
         "daygrid_get_proposal" => "查询确认结果",
@@ -1666,4 +1687,34 @@ fn tool_label(method: &str) -> &'static str {
 
 pub fn is_read_method(method: &str) -> bool {
     READ_METHODS.contains(&method)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_remind_at_only_fills_a_missing_item_field() {
+        // 没有 data.item：原样不动
+        for original in [
+            json!({"ok":false,"error":{"code":"NOT_FOUND"}}),
+            json!({"ok":true,"data":{"pending_approval":true}}),
+            json!({"ok":true,"data":{"item":"not an object"}}),
+        ] {
+            let mut v = original.clone();
+            with_remind_at(&mut v);
+            assert_eq!(v, original);
+        }
+        // 升级前的事项：补成 null
+        let mut v = json!({"ok":true,"data":{"item":{"id":"x"},"changed":true}});
+        with_remind_at(&mut v);
+        assert_eq!(
+            v,
+            json!({"ok":true,"data":{"item":{"id":"x","remind_at":null},"changed":true}})
+        );
+        // 已有值：不覆盖
+        let mut v = json!({"data":{"item":{"remind_at":"2026-10-20T09:00:00+08:00"}}});
+        with_remind_at(&mut v);
+        assert_eq!(v["data"]["item"]["remind_at"], "2026-10-20T09:00:00+08:00");
+    }
 }

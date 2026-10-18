@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:daygrid:item:1",
+  "$id": "urn:daygrid:item:2",
   "title": "Daygrid calendar item",
   "type": "object",
   "additionalProperties": false,
@@ -13,7 +13,9 @@
     "status",
     "revision",
     "created_at",
-    "updated_at"
+    "updated_at",
+    "visibility",
+    "remind_at"
   ],
   "properties": {
     "id": {
@@ -63,6 +65,22 @@
     "updated_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "visibility": {
+      "type": "string",
+      "enum": [
+        "private",
+        "shared"
+      ],
+      "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+    },
+    "remind_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
     }
   }
 }

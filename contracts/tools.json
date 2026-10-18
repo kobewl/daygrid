@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "contract_version": "0.2",
+  "contract_version": "0.3",
   "tools": [
     {
       "name": "daygrid_get_context",
       "title": "Get calendar context",
-      "description": "Start here. Returns today's date, weekday, calendar timezone, calendar_generation (required by every write), colors, limits and the approval mode.",
+      "description": "Start here. Returns today's date, the current time (now), weekday, calendar timezone, calendar_generation (required by every write), colors, limits and the approval mode.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -32,7 +32,7 @@
               },
               "data": {
                 "type": "object",
-                "description": "today, weekday, week_starts_on, calendar_timezone, calendar_generation, supported_date_range, max_query_days, max_page_size, colors, change_sequence, approval_mode, service_version"
+                "description": "today, now (current time in calendar_timezone, YYYY-MM-DDTHH:MM:SS±HH:MM), weekday, week_starts_on, calendar_timezone, calendar_generation, supported_date_range, max_query_days, max_page_size, colors, change_sequence, approval_mode, service_version"
               },
               "operation_id": {
                 "type": "string",
@@ -376,7 +376,8 @@
                         "revision",
                         "created_at",
                         "updated_at",
-                        "visibility"
+                        "visibility",
+                        "remind_at"
                       ],
                       "properties": {
                         "id": {
@@ -434,6 +435,14 @@
                             "shared"
                           ],
                           "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                        },
+                        "remind_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time",
+                          "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
                         }
                       }
                     }
@@ -573,7 +582,8 @@
                       "revision",
                       "created_at",
                       "updated_at",
-                      "visibility"
+                      "visibility",
+                      "remind_at"
                     ],
                     "properties": {
                       "id": {
@@ -631,6 +641,14 @@
                           "shared"
                         ],
                         "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                      },
+                      "remind_at": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time",
+                        "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
                       }
                     }
                   }
@@ -704,9 +722,222 @@
       }
     },
     {
+      "name": "daygrid_list_reminders",
+      "title": "List upcoming reminders",
+      "description": "List upcoming reminders that have not been shown yet, soonest first. Reminders more than 60 seconds past due (waiting to be shown when Daygrid next runs) are not listed.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "within_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 366,
+            "default": 7
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "data"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": true
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "items",
+                  "has_more",
+                  "now"
+                ],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "title": "Daygrid calendar item",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "date",
+                        "title",
+                        "notes",
+                        "color",
+                        "status",
+                        "revision",
+                        "created_at",
+                        "updated_at",
+                        "visibility",
+                        "remind_at"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "date": {
+                          "type": "string",
+                          "format": "date",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "notes": {
+                          "type": "string",
+                          "maxLength": 10000
+                        },
+                        "color": {
+                          "type": "string",
+                          "enum": [
+                            "blue",
+                            "sage",
+                            "amber",
+                            "rose",
+                            "violet",
+                            "gray"
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "planned",
+                            "done"
+                          ]
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "visibility": {
+                          "type": "string",
+                          "enum": [
+                            "private",
+                            "shared"
+                          ],
+                          "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                        },
+                        "remind_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time",
+                          "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
+                        }
+                      }
+                    }
+                  },
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "now": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "change_sequence": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "ok",
+              "error"
+            ],
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "ok": {
+                "const": false
+              },
+              "error": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "details"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "description": "Recovery advice for the calling assistant."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "annotations": {
+        "title": "List upcoming reminders",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "daygrid_create_item",
       "title": "Create an item",
-      "description": "Create one dated item. The date must be explicit (YYYY-MM-DD); resolve relative dates such as 'next Friday' with daygrid_get_context first.",
+      "description": "Create one dated item. The date must be explicit (YYYY-MM-DD); resolve relative dates such as 'next Friday' with daygrid_get_context first. Optionally set remind_at for a desktop notification.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -741,6 +972,14 @@
               "violet",
               "gray"
             ]
+          },
+          "remind_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40,
+            "description": "Optional reminder. 'YYYY-MM-DDTHH:MM' (seconds optional; 'T' or a space) is read in calendar_timezone; RFC 3339 with 'Z' or '±HH:MM' is also accepted (e.g. '2026-10-20T09:00', '2026-10-20T09:00+08:00'). Surrounding spaces are ignored; '+0800' style offsets are rejected. Minute precision; must not be in the past. null or omitted = no reminder. When due, Daygrid (if running) shows a desktop notification."
           },
           "idempotency_key": {
             "type": "string",
@@ -795,7 +1034,8 @@
                           "revision",
                           "created_at",
                           "updated_at",
-                          "visibility"
+                          "visibility",
+                          "remind_at"
                         ],
                         "properties": {
                           "id": {
@@ -853,6 +1093,14 @@
                               "shared"
                             ],
                             "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                          },
+                          "remind_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time",
+                            "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
                           }
                         }
                       },
@@ -1052,6 +1300,14 @@
                   "violet",
                   "gray"
                 ]
+              },
+              "remind_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 40,
+                "description": "Set or change the reminder. 'YYYY-MM-DDTHH:MM' (seconds optional; 'T' or a space) is read in calendar_timezone; RFC 3339 with 'Z' or '±HH:MM' is also accepted (e.g. '2026-10-20T09:00', '2026-10-20T09:00+08:00'). Surrounding spaces are ignored; '+0800' style offsets are rejected. Minute precision; must not be in the past. null clears it; omit to keep it. Changing date without remind_at moves an existing reminder by the same number of days."
               }
             }
           },
@@ -1108,7 +1364,8 @@
                           "revision",
                           "created_at",
                           "updated_at",
-                          "visibility"
+                          "visibility",
+                          "remind_at"
                         ],
                         "properties": {
                           "id": {
@@ -1166,6 +1423,14 @@
                               "shared"
                             ],
                             "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                          },
+                          "remind_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time",
+                            "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
                           }
                         }
                       },
@@ -1396,7 +1661,8 @@
                           "revision",
                           "created_at",
                           "updated_at",
-                          "visibility"
+                          "visibility",
+                          "remind_at"
                         ],
                         "properties": {
                           "id": {
@@ -1454,6 +1720,14 @@
                               "shared"
                             ],
                             "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                          },
+                          "remind_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time",
+                            "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
                           }
                         }
                       },
@@ -1682,7 +1956,8 @@
                           "revision",
                           "created_at",
                           "updated_at",
-                          "visibility"
+                          "visibility",
+                          "remind_at"
                         ],
                         "properties": {
                           "id": {
@@ -1740,6 +2015,14 @@
                               "shared"
                             ],
                             "description": "private: only on this computer; shared: visible to everyone in the team calendar. Assistants cannot change it."
+                          },
+                          "remind_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time",
+                            "description": "Reminder time in calendar_timezone with offset, minute precision; null = no reminder. Only on this computer (never shared with a team)."
                           }
                         }
                       },

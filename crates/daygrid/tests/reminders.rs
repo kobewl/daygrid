@@ -24,15 +24,15 @@ struct H {
 impl H {
     /// 日历时区固定为 Asia/Shanghai，结果与运行测试的机器无关。
     fn new() -> Self {
+        Self::in_tz("Asia/Shanghai")
+    }
+    fn in_tz(tz: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("calendar.db");
         drop(Store::open(&path, SECRET).unwrap());
         rusqlite::Connection::open(&path)
             .unwrap()
-            .execute(
-                "UPDATE metadata SET value='Asia/Shanghai' WHERE key='timezone'",
-                [],
-            )
+            .execute("UPDATE metadata SET value=?1 WHERE key='timezone'", [tz])
             .unwrap();
         let mut store = Store::open(&path, SECRET).unwrap();
         let generation = store.call("desktop", SECRET, "daygrid_get_context", json!({}))["data"]
@@ -729,4 +729,306 @@ fn reminder_rows_match_items_after_random_operations() {
         )
         .unwrap();
     assert_eq!(h.hint()["next_due_ms"], json!(next));
+}
+
+// ---------- MCP 契约 0.3：校验、列表、上下文 now、旧回执补字段 ----------
+
+const FORMAT: &str = "提醒时间格式无效，请使用 YYYY-MM-DDTHH:MM（日历时区）或带时区的 RFC 3339 时间，例如 2026-10-20T09:00 或 2026-10-20T09:00+08:00。";
+const RANGE: &str = "提醒时间需要在 1900–2100 年之间。";
+const GAP: &str = "这个时间在日历时区里不存在（夏令时切换），请换一个时间。";
+
+/// `YYYY-MM-DDTHH:MM:SS±HH:MM`（不用 regex：逐字符比对模板）。
+fn is_canonical_now(s: &str) -> bool {
+    let template = "dddd-dd-ddTdd:dd:dd+dd:dd";
+    s.len() == template.len()
+        && s.chars().zip(template.chars()).all(|(c, t)| match t {
+            'd' => c.is_ascii_digit(),
+            '+' => c == '+' || c == '-',
+            _ => c == t,
+        })
+}
+
+/// 相对真实时钟的提醒时刻（UTC，分钟精度），用于依赖「现在」的列表测试。
+fn from_now(minutes: i64) -> String {
+    (Utc::now() + Duration::minutes(minutes))
+        .format("%Y-%m-%dT%H:%MZ")
+        .to_string()
+}
+
+#[test]
+fn mcp_rejects_invalid_reminders_with_exact_messages_and_details() {
+    let mut h = H::new();
+    let conn = h.connect("write");
+    let too_long = format!("2030-10-20T09:00:00.{}+08:00", "0".repeat(20));
+    for (bad, message) in [
+        ("tomorrow 9am", FORMAT),
+        ("2026-10-20T09:00+0800", FORMAT),
+        ("2020-01-01T09:00", PAST),
+        (too_long.as_str(), FORMAT),
+        ("1899-12-31T09:00", RANGE),
+    ] {
+        let args = h.create_args(json!({"remind_at":bad}));
+        let r = h.as_conn(&conn, "daygrid_create_item", args);
+        assert_eq!(r["ok"], false, "{bad}");
+        assert_eq!(r["error"]["code"], "VALIDATION_ERROR", "{bad}");
+        assert_eq!(r["error"]["message"], message, "{bad}");
+        let details = &r["error"]["details"];
+        assert_eq!(details["field"], "remind_at");
+        assert_eq!(details["calendar_timezone"], "Asia/Shanghai");
+        assert!(
+            is_canonical_now(details["now"].as_str().unwrap()),
+            "{details}"
+        );
+        assert!(details["now"].as_str().unwrap().ends_with("+08:00"));
+    }
+    // 首尾空白、小写 t 和 z 都接受，结果规范化到日历时区
+    let args = h.create_args(json!({"remind_at":" 2030-10-20t09:00Z "}));
+    let r = h.as_conn(&conn, "daygrid_create_item", args);
+    assert_eq!(r["ok"], true, "{r}");
+    let item = r["data"]["item"].clone();
+    assert_eq!(item["remind_at"], "2030-10-20T17:00:00+08:00");
+    // patch 里 remind_at 可以是 null（清除），其他字段仍然不行
+    let args = h.update_args(&item, json!({"color":null}));
+    assert_eq!(
+        h.as_conn(&conn, "daygrid_update_item", args)["error"]["message"],
+        "字段不能为 null。"
+    );
+    let args = h.update_args(&item, json!({"remind_at":null}));
+    let r = h.as_conn(&conn, "daygrid_update_item", args);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(r["data"]["item"]["remind_at"].is_null());
+    assert_eq!(h.row(&item["id"]), None);
+}
+
+#[test]
+fn mcp_rejects_times_skipped_by_daylight_saving() {
+    let mut h = H::in_tz("America/New_York");
+    let conn = h.connect("write");
+    // 2030-03-10 02:00–03:00 在纽约不存在
+    let args = h.create_args(json!({"remind_at":"2030-03-10T02:30"}));
+    let r = h.as_conn(&conn, "daygrid_create_item", args);
+    assert_eq!(r["error"]["code"], "VALIDATION_ERROR", "{r}");
+    assert_eq!(r["error"]["message"], GAP);
+    assert_eq!(
+        r["error"]["details"]["calendar_timezone"],
+        "America/New_York"
+    );
+    let now = r["error"]["details"]["now"].as_str().unwrap();
+    assert!(is_canonical_now(now), "{now}");
+    // 夏令时边界外照常
+    let args = h.create_args(json!({"remind_at":"2030-03-10T03:30"}));
+    let r = h.as_conn(&conn, "daygrid_create_item", args);
+    assert_eq!(r["data"]["item"]["remind_at"], "2030-03-10T03:30:00-04:00");
+}
+
+#[test]
+fn get_context_reports_now_with_seconds() {
+    let mut h = H::new();
+    let ctx = h.desk("daygrid_get_context", json!({}));
+    let now = ctx["data"]["now"].as_str().unwrap();
+    assert!(is_canonical_now(now), "{now}");
+    assert!(now.ends_with("+08:00"));
+    assert!(now.starts_with(ctx["data"]["today"].as_str().unwrap()));
+    // 与真实时钟一致（允许 5 秒误差）
+    let delta = (ms(now) - Utc::now().timestamp_millis()).abs();
+    assert!(delta < 5_000, "{now}");
+}
+
+#[test]
+fn list_reminders_returns_upcoming_unfired_reminders_soonest_first() {
+    let mut h = H::new();
+    let conn = h.connect("read");
+    let list = |h: &mut H, args: Value| -> Value {
+        let r = h.as_conn(&conn, "daygrid_list_reminders", args);
+        assert_eq!(r["ok"], true, "{r}");
+        r["data"].clone()
+    };
+    let titles = |data: &Value| -> Vec<String> {
+        data["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let empty = list(&mut h, json!({}));
+    assert_eq!(empty["items"], json!([]));
+    assert_eq!(empty["has_more"], false);
+    assert!(is_canonical_now(empty["now"].as_str().unwrap()));
+
+    let day = 24 * 60;
+    let in3d = h.create(json!({"title":"三天后","remind_at":from_now(3 * day)}));
+    let in1h = h.create(json!({"title":"一小时后","remind_at":from_now(60)}));
+    h.create(json!({"title":"十天后","remind_at":from_now(10 * day)}));
+    h.create(json!({"title":"没有提醒"}));
+    // 默认 7 天，按时间排序
+    let data = list(&mut h, json!({}));
+    assert_eq!(titles(&data), ["一小时后", "三天后"]);
+    assert_eq!(data["has_more"], false);
+    assert_eq!(data["items"][0]["id"], in1h["id"]);
+    assert_eq!(data["items"][0]["remind_at"], in1h["remind_at"]);
+    assert_eq!(
+        titles(&list(&mut h, json!({"within_days":30}))),
+        ["一小时后", "三天后", "十天后"]
+    );
+    assert_eq!(
+        titles(&list(&mut h, json!({"within_days":1}))),
+        ["一小时后"]
+    );
+    // limit + has_more
+    let data = list(&mut h, json!({"within_days":30,"limit":2}));
+    assert_eq!(titles(&data), ["一小时后", "三天后"]);
+    assert_eq!(data["has_more"], true);
+    let data = list(&mut h, json!({"within_days":30,"limit":3}));
+    assert_eq!(data["has_more"], false);
+
+    // 已过期但未触发：60 秒以内照样列出（仍会触发），超过 60 秒的不列出（等下次运行时补发）
+    let now_ms = Utc::now().timestamp_millis();
+    let set_due = |h: &H, id: &Value, due_ms: i64| {
+        h.db()
+            .execute(
+                "UPDATE reminders SET due_ms=?1 WHERE item_id=?2",
+                rusqlite::params![due_ms, id.as_str().unwrap()],
+            )
+            .unwrap();
+    };
+    set_due(&h, &in1h["id"], now_ms - 30_000);
+    assert_eq!(titles(&list(&mut h, json!({}))), ["一小时后", "三天后"]);
+    set_due(&h, &in1h["id"], now_ms - 90_000);
+    assert_eq!(titles(&list(&mut h, json!({}))), ["三天后"]);
+
+    // 已触发、已完成、已删除的不列出
+    let fired = h.create(json!({"title":"已触发","remind_at":from_now(30)}));
+    h.db()
+        .execute(
+            "UPDATE reminders SET fired_at='2026-01-01T00:00:00.000Z' WHERE item_id=?1",
+            [fired["id"].as_str().unwrap()],
+        )
+        .unwrap();
+    let done = h.create(json!({"title":"已完成","remind_at":from_now(40)}));
+    assert_eq!(h.status(&done, "done")["ok"], true);
+    let gone = h.create(json!({"title":"已删除","remind_at":from_now(50)}));
+    assert_eq!(h.lifecycle("desktop_delete", &gone)["ok"], true);
+    assert_eq!(titles(&list(&mut h, json!({}))), ["三天后"]);
+    assert_eq!(list(&mut h, json!({}))["items"][0]["id"], in3d["id"]);
+
+    // 参数越界、未知字段、null
+    for bad in [
+        json!({"within_days":0}),
+        json!({"within_days":367}),
+        json!({"limit":0}),
+        json!({"limit":101}),
+        json!({"within_days":-1}),
+    ] {
+        let r = h.as_conn(&conn, "daygrid_list_reminders", bad.clone());
+        assert_eq!(r["error"]["code"], "VALIDATION_ERROR", "{bad}");
+        assert_eq!(r["error"]["message"], "范围或数量无效。", "{bad}");
+    }
+    for bad in [
+        json!({"days":3}),
+        json!({"limit":null}),
+        json!({"limit":"5"}),
+    ] {
+        let r = h.as_conn(&conn, "daygrid_list_reminders", bad.clone());
+        assert_eq!(r["error"]["code"], "VALIDATION_ERROR", "{bad}");
+    }
+    // 边界值可以
+    list(&mut h, json!({"within_days":366,"limit":100}));
+    // 审计摘要
+    let activity = h.desk("desktop_activity", json!({"limit":200}));
+    let summaries: Vec<&str> = activity["data"]["activity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["tool"] == "daygrid_list_reminders" && a["outcome"] == "ok")
+        .map(|a| a["summary"].as_str().unwrap())
+        .collect();
+    assert_eq!(summaries[0], "查询提醒，2 条");
+    assert!(summaries.contains(&"查询提醒，3 条"));
+}
+
+#[test]
+fn replayed_pre_upgrade_receipts_carry_remind_at_null() {
+    let mut h = H::new();
+    let conn = h.connect("write");
+    let args = h.create_args(json!({}));
+    let r = h.as_conn(&conn, "daygrid_create_item", args.clone());
+    assert_eq!(r["ok"], true, "{r}");
+    // 模拟升级前写下的回执：事项里没有 remind_at
+    let changed = h
+        .db()
+        .execute(
+            "UPDATE receipts SET result=json_remove(result,'$.data.item.remind_at') WHERE key=?1",
+            [args["idempotency_key"].as_str().unwrap()],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    let replay = h.as_conn(&conn, "daygrid_create_item", args);
+    assert_eq!(replay["replayed"], true, "{replay}");
+    let item = replay["data"]["item"].as_object().unwrap();
+    assert!(item.contains_key("remind_at"));
+    assert!(item["remind_at"].is_null());
+    assert_eq!(item["id"], r["data"]["item"]["id"]);
+    // 带提醒的回执原样重放，不被覆盖
+    let args = h.create_args(json!({"remind_at":"2030-10-20T09:00"}));
+    h.as_conn(&conn, "daygrid_create_item", args.clone());
+    let replay = h.as_conn(&conn, "daygrid_create_item", args);
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(
+        replay["data"]["item"]["remind_at"],
+        "2030-10-20T09:00:00+08:00"
+    );
+}
+
+#[test]
+fn approved_pre_upgrade_proposals_carry_remind_at_null() {
+    let mut h = H::new();
+    h.desk(
+        "desktop_set_settings",
+        json!({"approval_mode":"all_writes"}),
+    );
+    let conn = h.connect("write");
+    let args = h.create_args(json!({}));
+    let r = h.as_conn(&conn, "daygrid_create_item", args);
+    let pid = r["data"]["proposal"]["id"].as_str().unwrap().to_string();
+    let d = h.desk(
+        "desktop_decide_proposal",
+        json!({"proposal_id":pid,"decision":"approve"}),
+    );
+    assert_eq!(d["data"]["proposal"]["state"], "approved", "{d}");
+    // 模拟升级前的确认结果：事项里没有 remind_at
+    h.db()
+        .execute(
+            "UPDATE proposals SET outcome=json_remove(outcome,'$.data.item.remind_at') WHERE id=?1",
+            [&pid],
+        )
+        .unwrap();
+    let stored: String = h
+        .db()
+        .query_row("SELECT outcome FROM proposals WHERE id=?1", [&pid], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(!stored.contains("remind_at"));
+    let got = h.as_conn(&conn, "daygrid_get_proposal", json!({"proposal_id":pid}));
+    let item = got["data"]["proposal"]["result"]["item"]
+        .as_object()
+        .unwrap();
+    assert!(item.contains_key("remind_at"), "{got}");
+    assert!(item["remind_at"].is_null());
+    let listed = h.desk("desktop_proposals", json!({}));
+    let p = listed["data"]["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == pid.as_str())
+        .unwrap()
+        .clone();
+    assert!(p["result"]["item"]["remind_at"].is_null());
+    assert!(
+        p["result"]["item"]
+            .as_object()
+            .unwrap()
+            .contains_key("remind_at")
+    );
 }
