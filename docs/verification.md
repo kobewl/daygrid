@@ -11,7 +11,7 @@
 - `pnpm check`：版本一致、`cargo fmt --check`、`clippy --workspace --all-targets -D warnings`、TypeScript 类型检查与前端生产构建通过。
 - `pnpm test`：前端 29 项（新增 `reminder.test.mjs` 15 项：`toInput` / `splitReminder` / `joinReminder` 含不完整情况、上海与纽约的 `nowInZone`、`isPast` 同一分钟不算过去、`defaultReminder` 含 23:30 → 23:59、跨月跨年平移、`zhDateTime`、`reminderLabel`、`sameRemindAt`、`reminderDirty`（null/null 不算改动、只填日期算改动）、`applyReminderEdit`（改时间 / 取消 / 设置都标记为改过，改事项日期只平移不标记））。Rust：`daygrid` 单元 60、`approvals` 7、`day_marks` 4、`maintenance` 12、`reminders` 21、`storage` 3、桌面端 3、`collab` 30、`server_db` 17，共 157 项通过。
   - `reminders`：存储往返与规范化、`null` 清除、完成 / 删除 / 重新打开 / 恢复、只改日期时平移、MCP 身份写入、all_writes 提交严格 / 批准放宽、只读成员只改提醒、200 次随机操作后的表不变量、只触发一次、24 小时补发与作废、提示文件重写、MCP 校验错误与夏令时、`daygrid_list_reminders`、`context.now`、旧回执与已批准请求补 `remind_at: null`，以及用虚拟时钟驱动真实 `Store` 的调度测试（只通知 1 次、不忙循环）。
-  - `maintenance`：两份契约与代码同步（10 个工具）、v3→v5 与 v4→v5 迁移并生成有效的 `pre-v5.bak`、备份失败时不升级。
+  - `maintenance`：两份契约与代码同步（10 个工具）、v3→v5 与 v4→v5 迁移并生成有效的 `pre-v5.bak`、迁移时为已有提醒补建行、备份失败或 backfill 失败时版本号不变。
   - `collab`：共享事项上的提醒不进 outbox、同事改标题后保留、改日期后平移且不产生 outbox、同事删除后提醒行删除、只读成员可以设置提醒。
   - 桌面端：`NotificationCenterDelegate` 类存在，补 `shouldPresentNotification:` 返回 true 且幂等。
 - `pnpm test:mcp`：官方 Rust SDK 子进程联调通过：10 个工具；本地格式创建带提醒的事项并返回规范串；`daygrid_list_reminders` 列出；`patch {"remind_at":null}` 清除；`"tomorrow 9am"` 返回 `VALIDATION_ERROR` 和 `details.now`；`context.now` 带秒。
