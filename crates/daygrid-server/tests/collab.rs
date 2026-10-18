@@ -1479,3 +1479,116 @@ fn v7_offline_edits_while_unlinked_are_reconciled_per_field_not_overwritten() {
     assert!(a.get(&extra).is_some());
     assert_eq!(a.snapshot(), b.snapshot());
 }
+
+// ============================ 提醒：本机字段，不同步 ============================
+
+/// 本机的提醒行：(due_ms, 是否已触发)。
+fn reminder_row(pc: &Pc, id: &str) -> Option<(i64, bool)> {
+    use rusqlite::OptionalExtension;
+    rusqlite::Connection::open(pc.dir.path().join("calendar.db"))
+        .unwrap()
+        .query_row(
+            "SELECT due_ms,fired_at IS NOT NULL FROM reminders WHERE item_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap()
+}
+
+#[test]
+fn m1_reminders_stay_local_and_follow_colleague_edits() {
+    use daygrid::domain::remind_epoch_ms;
+    let server = start_server();
+    let (alice, bob) = (Pc::owner(&server), Pc::join(&server, "Bob", "editor"));
+    let id = alice.create("2026-10-15", "周会", "");
+    settle(&[&alice, &bob]);
+    let before = server_snapshot(&server, &alice);
+    // 共享事项上设置提醒：不进 outbox，服务端的事项不变，同事那里也没有
+    let r = bob.update(&id, json!({"remind_at":"2030-10-15T09:00"}));
+    assert_eq!(r["ok"], true, "{r}");
+    let remind = r["data"]["item"]["remind_at"].as_str().unwrap().to_string();
+    assert_eq!(&remind[..16], "2030-10-15T09:00");
+    assert_eq!(bob.pending(), 0, "设置提醒不产生同步操作");
+    settle(&[&alice, &bob]);
+    assert_eq!(server_snapshot(&server, &alice), before);
+    assert!(alice.get(&id).unwrap()["remind_at"].is_null());
+    assert_eq!(reminder_row(&alice, &id), None);
+    // 同事改标题：提醒保留
+    alice.update(&id, json!({"title":"周例会"}));
+    alice.sync();
+    bob.sync();
+    let it = bob.get(&id).unwrap();
+    assert_eq!(it["title"], "周例会");
+    assert_eq!(it["remind_at"], remind.as_str());
+    assert_eq!(
+        reminder_row(&bob, &id),
+        Some((remind_epoch_ms(&remind).unwrap(), false))
+    );
+    assert_eq!(bob.pending(), 0);
+    // 同事改日期（+2 天）：提醒平移到新日期的同一时刻，平移不产生同步操作
+    alice.update(&id, json!({"date":"2026-10-17"}));
+    alice.sync();
+    bob.sync();
+    let it = bob.get(&id).unwrap();
+    assert_eq!(it["date"], "2026-10-17");
+    let shifted = it["remind_at"].as_str().unwrap().to_string();
+    assert_eq!(&shifted[..16], "2030-10-17T09:00");
+    assert_eq!(
+        reminder_row(&bob, &id),
+        Some((remind_epoch_ms(&shifted).unwrap(), false))
+    );
+    assert_eq!(bob.pending(), 0, "平移不产生同步操作");
+    settle(&[&alice, &bob]);
+    assert_eq!(bob.snapshot(), server_snapshot(&server, &bob));
+    assert!(alice.get(&id).unwrap()["remind_at"].is_null());
+    // 同事完成后又重新打开：提醒随状态维护
+    alice.set_status(&id, "done");
+    alice.sync();
+    bob.sync();
+    assert_eq!(reminder_row(&bob, &id), None);
+    alice.set_status(&id, "planned");
+    alice.sync();
+    bob.sync();
+    assert_eq!(
+        reminder_row(&bob, &id),
+        Some((remind_epoch_ms(&shifted).unwrap(), false))
+    );
+    // 同事删除：提醒行删除
+    alice.delete(&id);
+    alice.sync();
+    bob.sync();
+    assert!(bob.get(&id).is_none());
+    assert_eq!(reminder_row(&bob, &id), None);
+    assert_eq!(bob.pending(), 0);
+    // 提示文件跟着同步更新（同步线程直接调用的公开方法末尾会刷新）
+    let hint: Value = serde_json::from_str(
+        &std::fs::read_to_string(bob.dir.path().join("reminders.next")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(hint["next_due_ms"], Value::Null);
+}
+
+#[test]
+fn m2_viewer_can_set_a_reminder_on_shared_items_but_nothing_else() {
+    let server = start_server();
+    let alice = Pc::owner(&server);
+    let viewer = Pc::join(&server, "Vera", "viewer");
+    let id = alice.create("2026-10-15", "周会", "");
+    settle(&[&alice, &viewer]);
+    let r = viewer.update(&id, json!({"remind_at":"2030-10-15T09:00"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(reminder_row(&viewer, &id).is_some());
+    assert_eq!(viewer.pending(), 0);
+    let r = viewer.update(
+        &id,
+        json!({"title":"改一下","remind_at":"2030-10-15T10:00"}),
+    );
+    assert_eq!(r["error"]["code"], "PERMISSION_DENIED");
+    settle(&[&alice, &viewer]);
+    let it = viewer.get(&id).unwrap();
+    assert_eq!(it["title"], "周会");
+    assert_eq!(&it["remind_at"].as_str().unwrap()[..16], "2030-10-15T09:00");
+    assert_eq!(alice.get(&id).unwrap()["title"], "周会");
+    assert!(viewer.conflicts().is_empty());
+}

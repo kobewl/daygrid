@@ -755,6 +755,7 @@ fn validated(fields: &ItemFields) -> Result<ItemFields, String> {
         created_at: String::new(),
         updated_at: String::new(),
         visibility: "private".into(),
+        remind_at: None,
     };
     domain::validate(&mut item).map_err(|e| e.message)?;
     Ok(ItemFields::from(&item))

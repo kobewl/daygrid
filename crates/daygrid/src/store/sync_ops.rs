@@ -394,6 +394,7 @@ fn rebuild_local(db: &Connection, id: &str, actor: &str) -> Result<bool> {
             created_at: snap.created_at.clone(),
             updated_at: snap.updated_at.clone(),
             visibility: "shared".into(),
+            remind_at: None,
         };
         let body = serde_json::to_string(&item).unwrap();
         db.execute(
@@ -425,6 +426,19 @@ fn rebuild_local(db: &Connection, id: &str, actor: &str) -> Result<bool> {
     item.notes = eff.fields.notes.clone();
     item.color = eff.fields.color.clone();
     item.status = eff.fields.status.clone();
+    // remind_at 是本机字段（item 里原样保留）：同步只改日期时按天数平移，时刻不变。
+    if before.date != item.date
+        && let Some(r) = item.remind_at.as_deref()
+    {
+        let tz = meta(db, "timezone")?
+            .and_then(|t| t.parse::<chrono_tz::Tz>().ok())
+            .ok_or_else(|| Error::new("STORAGE_ERROR", "日历时区无效。"))?;
+        match domain::shift_remind_at(r, &before.date, &item.date, tz) {
+            Some(s) => item.remind_at = Some(s),
+            // validate 保证存储值可解析，正常不会发生；保持原值，不让整次同步失败。
+            None => tracing::warn!("remind_at shift failed; kept as is"),
+        }
+    }
     item.revision += 1;
     item.updated_at = snap
         .map(|s| s.updated_at)
@@ -448,6 +462,8 @@ fn rebuild_local(db: &Connection, id: &str, actor: &str) -> Result<bool> {
         _ => "update",
     };
     history(db, id, action, Some(&before), &body, actor)?;
+    // 同事改了日期、状态或删除 / 恢复：提醒行随之维护（同一事务）。
+    super::reminders::sync_row(db, &item, eff.deleted, Utc::now().timestamp_millis())?;
     Ok(true)
 }
 
@@ -890,6 +906,7 @@ impl Store {
         }
         let count = result?;
         tracing::info!(shared = count, "sync linked");
+        self.refresh_reminder_hint();
         self.runtime.wake();
         Ok(count)
     }
@@ -1048,6 +1065,7 @@ impl Store {
             observe_ts(&tx, &cfg.client_id, &ts)?;
         }
         tx.commit()?;
+        self.refresh_reminder_hint();
         Ok(stats)
     }
 
@@ -1097,6 +1115,7 @@ impl Store {
             stats.changed += 1;
         }
         tx.commit()?;
+        self.refresh_reminder_hint();
         if resp.role.as_deref().is_some_and(|r| r != cfg.role) {
             self.runtime.wake();
         }
@@ -1108,6 +1127,7 @@ impl Store {
         let tx = self.db.transaction()?;
         apply_role(&tx, role)?;
         tx.commit()?;
+        self.refresh_reminder_hint();
         Ok(())
     }
 
