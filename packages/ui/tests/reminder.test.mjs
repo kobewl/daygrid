@@ -173,3 +173,28 @@ test("applyReminderEdit：改事项日期时平移提醒，不改 remindTouched"
   assert.equal(blank.date, "");
   assert.deepEqual(blank.reminder, { date: "2026-10-20", time: "09:00" });
 });
+
+test("applyReminderEdit：事项日期经过空值时，仍按最近一次有效日期平移", () => {
+  const itemDate = (d, value) => applyReminderEdit(d, { type: "itemDate", value });
+  // A → "" → B：平移 B − A = 5 天，仍不算用户改过。
+  const blank = itemDate(draft(), "");
+  const b = itemDate(blank, "2026-10-25");
+  assert.equal(b.date, "2026-10-25");
+  assert.deepEqual(b.reminder, { date: "2026-10-25", time: "09:00" });
+  assert.equal(b.remindTouched, false);
+  // 连续两次空值也一样。
+  const twice = itemDate(itemDate(itemDate(draft(), ""), ""), "2026-10-25");
+  assert.deepEqual(twice.reminder, { date: "2026-10-25", time: "09:00" });
+  // 提醒和事项不在同一天：保持相对天数。
+  const offset = itemDate(itemDate(draft({ reminder: { date: "2026-10-19", time: "21:30" } }), ""), "2026-11-02");
+  assert.deepEqual(offset.reminder, { date: "2026-11-01", time: "21:30" });
+  // 直接改「提醒」一栏仍然标记为改过，之后改事项日期照常平移。
+  const timed = applyReminderEdit(blank, { type: "time", value: "10:00" });
+  assert.equal(timed.remindTouched, true);
+  const moved = itemDate(timed, "2026-10-22");
+  assert.deepEqual(moved.reminder, { date: "2026-10-22", time: "10:00" });
+  assert.equal(moved.remindTouched, true);
+  const dated = applyReminderEdit(b, { type: "date", value: "2026-10-24" });
+  assert.deepEqual(dated.reminder, { date: "2026-10-24", time: "09:00" });
+  assert.equal(dated.remindTouched, true);
+});

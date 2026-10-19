@@ -14,6 +14,8 @@ export type ReminderDraft = {
   reminder: ReminderParts | null;
   /** 用户直接动过「提醒」一栏；只改事项日期带来的平移不算。 */
   remindTouched: boolean;
+  /** 最近一次有效（非空）的事项日期：日期框编辑中途报 "" 时，平移仍以它为基准。 */
+  dateBase?: string;
 };
 
 export type ReminderAction =
@@ -119,7 +121,8 @@ export function reminderDirty(reminder: ReminderParts | null, originalRemindAt: 
 /**
  * 对话框里与提醒有关的每一次修改都经过这里。用户对「提醒」一栏的直接操作都会把
  * remindTouched 设为 true（保存时才会把 remind_at 放进 patch）；只改事项日期时
- * 提醒跟着平移，但不算用户改过，交给服务端按同样的规则平移。
+ * 提醒跟着平移，但不算用户改过，交给服务端按同样的规则平移。事项日期中途被清空时
+ * 不平移，但记住最近一次的有效日期，下一个有效日期仍从它算起。
  */
 export function applyReminderEdit<D extends ReminderDraft>(draft: D, action: ReminderAction): D {
   switch (action.type) {
@@ -139,12 +142,16 @@ export function applyReminderEdit<D extends ReminderDraft>(draft: D, action: Rem
     case "clear":
       return { ...draft, reminder: null, remindTouched: true };
     case "itemDate": {
+      // WebKit 的日期框在退格清掉某一段时会先报 ""：这时保留最近一次的有效日期作基准，
+      // 下一个有效日期仍按（新 − 旧）天数平移，与服务端按存储日期平移的结果一致。
+      const base = draft.date || draft.dateBase || "";
       const local = joinReminder(draft.reminder);
-      const shift = typeof local === "string" && draft.date && action.value;
+      const shift = typeof local === "string" && base !== "" && action.value !== "";
       return {
         ...draft,
         date: action.value,
-        reminder: shift ? splitReminder(shiftReminder(local, draft.date, action.value)) : draft.reminder,
+        dateBase: action.value || base,
+        reminder: shift ? splitReminder(shiftReminder(local, base, action.value)) : draft.reminder,
       };
     }
   }
