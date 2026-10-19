@@ -20,6 +20,9 @@ tauri-plugin-notification = "=2.4.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 # 前台也弹横幅：给 mac-notification-sys 的 delegate 补 shouldPresentNotification:（已在 Cargo.lock 中）
 objc2 = "=0.6.5"
+# 全屏时关窗：等 NSWindowDidExitFullScreenNotification 再隐藏（版本已在 Cargo.lock 中）
+block2 = "=0.6.2"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # 只给类名测试用，保证测试二进制链接进 notify.m
 mac-notification-sys = "=0.6.15"

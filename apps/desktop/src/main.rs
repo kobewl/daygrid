@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod hide_on_close;
 mod reminders;
 mod update;
 
@@ -257,6 +259,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             reminders::present_while_frontmost();
             reminders::spawn(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            hide_on_close::observe_fullscreen_exit(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -270,14 +274,14 @@ fn main() {
             update::open_release_page
         ]);
     // macOS：关闭主窗口只是隐藏，应用和提醒线程继续运行；⌘Q 才退出。
+    // 全屏时先退出全屏，退出动画结束后再隐藏（见 hide_on_close）。
     #[cfg(target_os = "macos")]
     let builder = builder.on_window_event(|window, event| {
         if window.label() == "main"
             && let tauri::WindowEvent::CloseRequested { api, .. } = event
         {
             api.prevent_close();
-            let _ = window.hide();
-            let _ = window.emit("daygrid://window-hidden", ());
+            hide_on_close::on_close_requested(window);
         }
     });
     builder
@@ -293,6 +297,7 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     if let tauri::RunEvent::Reopen { .. } = event
         && let Some(window) = app.get_webview_window("main")
     {
+        hide_on_close::cancel_pending();
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
