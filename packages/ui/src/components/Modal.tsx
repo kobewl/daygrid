@@ -26,7 +26,8 @@ export function Modal({
     const previous = document.activeElement as HTMLElement | null;
     const node = ref.current!;
     const focusable = () => Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
-    (node.querySelector<HTMLElement>("[data-autofocus]") ?? focusable()[0] ?? node).focus();
+    // 禁用的元素调用 .focus() 不会生效，所以跳过它们，退回第一个可聚焦的元素。
+    (node.querySelector<HTMLElement>("[data-autofocus]:not(:disabled)") ?? focusable()[0] ?? node).focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();

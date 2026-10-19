@@ -677,7 +677,7 @@ button.more:hover { color: var(--text); text-decoration: underline; }
 .field > span, .field > legend { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0; }
 .field-row { display: flex; gap: 16px; align-items: flex-start; }
 .field-row .field:first-child { flex: 0 0 190px; }
-input[type="text"], input[type="date"], input:not([type]), textarea {
+input[type="text"], input[type="password"], input[type="date"], input[type="time"], input:not([type]), textarea {
   width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 9px;
   background: var(--surface); outline: 0; transition: border-color 0.12s, box-shadow 0.12s;
 }
@@ -1025,15 +1025,21 @@ details[open] > summary::before { transform: rotate(90deg); }
    悬停加深一档，聚焦用强调色与光晕。 */
 .dialog .title-field input,
 .dialog textarea,
-.dialog input[type="date"] {
+.dialog input[type="date"],
+.dialog input[type="time"] {
   border-color: color-mix(in srgb, var(--line-strong) 65%, var(--line));
 }
-.dialog .title-field input:hover:not(:focus),
-.dialog textarea:hover:not(:focus),
-.dialog input[type="date"]:hover:not(:focus) {
+.dialog .title-field input:hover:not(:focus):not(:disabled),
+.dialog textarea:hover:not(:focus):not(:disabled),
+.dialog input[type="date"]:hover:not(:focus):not(:disabled),
+.dialog input[type="time"]:hover:not(:focus):not(:disabled) {
   border-color: var(--line-strong);
 }
-.dialog input[type="date"]:focus { border-color: var(--accent); }
+.dialog input[type="date"]:focus,
+.dialog input[type="time"]:focus { border-color: var(--accent); }
+/* 只读成员编辑共享事项时，标题、日期、备注不可编辑。 */
+.dialog input:disabled,
+.dialog textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .dialog .title-field input {
   padding: 12px 13px;
   font-size: 16px;
@@ -1050,10 +1056,60 @@ details[open] > summary::before { transform: rotate(90deg); }
   flex: none;
   width: 190px;
 }
-.dialog .date-field > span {
+.dialog .date-field > span,
+.dialog .remind-field > span {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* 提醒：未设置时是一个虚线按钮，设置后是日期 + 时间 + 取消。 */
+.remind-empty {
+  align-self: flex-start;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--line-strong) 65%, var(--line));
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 13px;
+  transition: border-color 0.12s, color 0.12s;
+}
+.remind-empty:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.remind-inputs { display: flex; align-items: center; gap: 8px; }
+.remind-inputs input[type="date"] { width: 150px; }
+.remind-inputs input[type="time"] { width: 110px; }
+.remind-field small { font-size: 12px; }
+.remind-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.remind-badge.past { color: var(--muted); background: var(--hover); }
+.chip-bell { flex: none; opacity: 0.8; }
+.remind-test { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+/* 只给读屏软件的文字。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 .dialog textarea {
   background: var(--surface-2);
@@ -1185,3 +1241,63 @@ details[open] > summary::before { transform: rotate(90deg); }
 .notes-preview:hover { border-color: var(--line-strong); }
 .notes-preview .muted { font-size: 13px; }
 .notes-hint { font-size: 11px; color: var(--muted); }
+
+/* ───────── 多人协作 ───────── */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.online, .dot.syncing { background: var(--ok); }
+.dot.syncing, .dot.connecting { animation: pulse-dot 1.2s ease-in-out infinite; }
+.dot.connecting, .dot.offline { background: var(--warn); }
+.dot.error { background: var(--danger); }
+@keyframes pulse-dot { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .dot.syncing, .dot.connecting { animation: none; } }
+
+.avatars { display: inline-flex; align-items: center; }
+.avatar {
+  display: inline-grid; place-items: center; border-radius: 50%; color: #fff; font-weight: 600;
+  border: 2px solid var(--surface); margin-left: -6px; flex: none; line-height: 1;
+}
+.avatars .avatar:first-child { margin-left: 0; }
+.avatar.more { background: var(--hover); color: var(--muted); width: 22px; height: 22px; font-size: 10px; }
+
+.sync-chip {
+  margin-top: auto; display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-align: left; cursor: pointer;
+}
+.sync-chip:hover { background: var(--hover); }
+.sync-chip + .sidebar-foot { margin-top: 14px; }
+.sync-chip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sync-chip-text strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-chip-text small { font-size: 11px; color: var(--muted); }
+
+.presence { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.row-editing { font-size: 11px; color: var(--accent); margin-top: 2px; }
+
+.collab-form { display: flex; flex-direction: column; gap: 12px; }
+.collab-form .segmented { align-self: flex-start; }
+.invite-code { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.invite-code code { padding: 4px 8px; border-radius: 6px; background: var(--hover); user-select: all; -webkit-user-select: all; }
+.conflict-title { font-size: 13px; display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.conflicts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.conflict { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; background: var(--surface-2); }
+.conflict-head { display: flex; flex-direction: column; gap: 2px; }
+.conflict-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; }
+.conflict-diff dt { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.conflict-diff dd { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 可见范围：事项行上的「仅自己」标记、对话框里的选择、连接时的共享询问 */
+.vis-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--hover);
+}
+.visibility-field { display: grid; gap: 6px; }
+.visibility-field .segmented { justify-self: start; }
+.check-line { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; cursor: pointer; }
+.check-line input { margin-top: 3px; }
+.conflict-message { margin: 2px 0 6px; }

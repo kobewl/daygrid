@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { nowInZone, shiftReminder, toInput } from "./lib/reminder";
 
 export type Item = {
   id: string;
@@ -10,7 +11,12 @@ export type Item = {
   revision: number;
   created_at: string;
   updated_at: string;
+  /** private：只在这台电脑上，永远不会上传；shared：团队日历里所有成员可见。 */
+  visibility: Visibility;
+  /** 本机提醒，日历时区的规范串（如 2026-10-20T09:00:00+08:00）；null = 不提醒。旧的修改记录里没有这个字段。 */
+  remind_at?: string | null;
 };
+export type Visibility = "private" | "shared";
 export type DayMark = { date: string; kind: "rest" | "work" };
 export type ApprovalMode = "deletes" | "all_writes";
 export type Context = {
@@ -21,6 +27,8 @@ export type Context = {
   change_sequence: number;
   approval_mode: ApprovalMode;
   service_version: string;
+  /** 日历时区的当前时间（YYYY-MM-DDTHH:MM:SS±HH:MM）。 */
+  now?: string;
 };
 export type History = {
   sequence: number;
@@ -77,7 +85,57 @@ export type Pulse = {
   pending_proposals: number;
   proposal_rev: number;
   activity_sequence: number;
+  /** 协同状态 / 在线成员每变一次加一；旧服务没有这个字段。 */
+  sync_sequence?: number;
 };
+export type SyncState = "off" | "connecting" | "syncing" | "online" | "offline" | "error";
+export type SyncRole = "owner" | "editor" | "viewer";
+export type SyncPeer = {
+  client_id: string;
+  user: string;
+  date: string | null;
+  item_id: string | null;
+  editing: boolean;
+};
+export type SyncStatus = {
+  linked: boolean;
+  config: {
+    url: string;
+    workspace_id: string;
+    workspace_name: string;
+    user_id: string;
+    user_name: string;
+    role: SyncRole;
+    client_id: string;
+    insecure: boolean;
+  } | null;
+  state: SyncState;
+  pending: number;
+  /** 本机现有（未删除）的事项数；连接团队时据此询问是否共享。 */
+  local_items: number;
+  open_conflicts: number;
+  last_sync_at: string | null;
+  last_error: string | null;
+  events_connected: boolean;
+  cursor: number;
+  peers: SyncPeer[];
+};
+export type SyncConflict = {
+  id: number;
+  item_id: string;
+  field: string;
+  /** 保留下来的值 / 我被覆盖的值（都是原始字符串）。 */
+  kept_value: string | null;
+  lost_value: string | null;
+  kept_by: string | null;
+  reason: "concurrent_edit" | "item_deleted" | "invalid" | "read_only" | string;
+  /** 本地生成的记录（服务器拒绝 / 角色变成只读）附带的原因说明。 */
+  message?: string;
+  occurred_at: string;
+  state: "open" | "dismissed" | "restored";
+  item_title: string | null;
+};
+export type SyncInvite = { code: string; role: SyncRole; expires_at: string; max_uses: number };
 export type Diagnostics = {
   service_version: string;
   ipc_version: number;
@@ -210,7 +268,17 @@ const mk = (
   revision: 1,
   created_at: ago(5000 - items0.length * 7),
   updated_at: ago(5000 - items0.length * 7),
+  visibility: "private",
+  remind_at: null,
 });
+// 预览里的提醒：把界面传来的本地串（YYYY-MM-DDTHH:MM）补成带浏览器当前偏移的规范串。
+const offset = () => {
+  const minutes = -new Date().getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  return `${minutes < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+};
+const normalizeRemind = (v: unknown): string | null =>
+  typeof v !== "string" ? null : v.length === 16 ? `${v}:00${offset()}` : v;
 const items0: Item[] = [];
 if (preview) {
   [
@@ -313,6 +381,55 @@ const activity: Activity[] = preview
     }))
   : [];
 const installed = new Set<string>();
+// 协同的演示状态：只为看界面，不会联网，也不是真实的团队数据。
+const sync = {
+  linked: false,
+  url: "",
+  name: "我",
+  role: "editor" as SyncRole,
+  seq: 1,
+  peers: [] as SyncPeer[],
+  conflicts: preview
+    ? ([
+        {
+          id: 1,
+          item_id: items[0]?.id ?? key(),
+          field: "title",
+          kept_value: "团队周会（改到 10 点）",
+          lost_value: "团队周例会",
+          kept_by: "小林（演示）",
+          reason: "concurrent_edit",
+          occurred_at: ago(12),
+          state: "open",
+          item_title: items[0]?.title ?? null,
+        },
+      ] as SyncConflict[])
+    : [],
+};
+const syncStatus = (): SyncStatus => ({
+  linked: sync.linked,
+  config: sync.linked
+    ? {
+        url: sync.url,
+        workspace_id: "demo",
+        workspace_name: "演示团队",
+        user_id: "me",
+        user_name: sync.name,
+        role: sync.role,
+        client_id: "demo-client",
+        insecure: sync.url.startsWith("http://"),
+      }
+    : null,
+  state: sync.linked ? "online" : "off",
+  pending: 0,
+  local_items: items.length,
+  open_conflicts: sync.conflicts.filter((c) => c.state === "open").length,
+  last_sync_at: sync.linked ? new Date().toISOString() : null,
+  last_error: null,
+  events_connected: sync.linked,
+  cursor: 0,
+  peers: sync.peers,
+});
 
 type Fail = { code: string; message: string; details?: object };
 const fail = (code: string, message: string, details: object = {}): never => {
@@ -397,6 +514,7 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
         change_sequence: sequence,
         approval_mode: approvalMode,
         service_version: "preview",
+        now: `${nowInZone(Intl.DateTimeFormat().resolvedOptions().timeZone)}:${pad(new Date().getSeconds())}${offset()}`,
       };
     case "daygrid_list_items":
       return {
@@ -425,7 +543,11 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
         revision: 1,
         created_at: now,
         updated_at: now,
+        visibility: a.visibility ?? "private",
+        remind_at: normalizeRemind(a.remind_at),
       };
+      if (item.visibility === "shared" && !sync.linked)
+        fail("VALIDATION_ERROR", "还没有连接团队日历，事项只保存在本机。");
       items.push(item);
       record(item, null, "create");
       return { item, changed: true };
@@ -442,7 +564,12 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
       const before = { ...item };
       let action = "delete";
       if (method === "daygrid_update_item") {
-        Object.assign(item, a.patch);
+        const patch = { ...a.patch };
+        if ("remind_at" in patch) patch.remind_at = normalizeRemind(patch.remind_at);
+        else if (patch.date && patch.date !== item.date && item.remind_at)
+          // 只改日期：提醒按同样的天数平移，与服务端一致。
+          patch.remind_at = normalizeRemind(shiftReminder(toInput(item.remind_at)!, item.date, patch.date));
+        Object.assign(item, patch);
         action = "update";
       } else if (method === "daygrid_set_item_status") {
         item.status = a.status;
@@ -456,6 +583,24 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
       }
       record(item, before, action);
       return { item: { ...item }, changed: true };
+    }
+    case "desktop_set_visibility": {
+      const item = find(a.item_id);
+      if (item.revision !== a.expected_revision)
+        fail("REVISION_CONFLICT", "事项已被修改，草稿已保留，请读取最新内容。", {
+          current_revision: item.revision,
+          current_item: item,
+        });
+      if (a.visibility === "shared" && !sync.linked)
+        fail("VALIDATION_ERROR", "还没有连接团队日历，事项只保存在本机。");
+      const before = { ...item };
+      item.visibility = a.visibility;
+      if (before.visibility !== item.visibility) {
+        item.revision++;
+        item.updated_at = new Date().toISOString();
+        record(item, before, "visibility");
+      }
+      return { item: { ...item }, changed: before.visibility !== item.visibility };
     }
     case "desktop_restore": {
       const item = trash.get(a.item_id) ?? fail("NOT_FOUND", "事项不存在或生命周期状态不符。");
@@ -489,6 +634,7 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
         pending_proposals: proposals.filter((p) => p.state === "pending").length,
         proposal_rev: proposalRev,
         activity_sequence: activitySeq,
+        sync_sequence: sync.seq,
       };
     case "desktop_connections":
       return { connections };
@@ -572,6 +718,55 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
       if (a.kind === "default") dayMarks.delete(a.date);
       else dayMarks.set(a.date, a.kind);
       return { date: a.date, kind: a.kind };
+    case "desktop_sync_status":
+      return syncStatus();
+    case "desktop_sync_connect": {
+      // 预览里没有真实服务器：只演示界面。立刻“连上”一个虚构的团队日历。
+      if (sync.linked) fail("VALIDATION_ERROR", "已连接协同，请先断开。");
+      if (!String(a.url ?? "").trim()) fail("VALIDATION_ERROR", "请填写服务器地址。");
+      sync.linked = true;
+      sync.name = String(a.display_name ?? "").trim() || "我";
+      sync.url = String(a.url).trim();
+      sync.role = "editor";
+      if (a.share_existing)
+        for (const i of items) {
+          const before = { ...i };
+          i.visibility = "shared";
+          i.revision++;
+          record(i, before, "visibility");
+        }
+      sync.peers = [
+        { client_id: key(), user: "小林（演示）", date: today, item_id: null, editing: false },
+      ];
+      sync.seq++;
+      return { accepted: true };
+    }
+    case "desktop_sync_disconnect":
+      sync.linked = false;
+      sync.peers = [];
+      sync.seq++;
+      return {};
+    case "desktop_sync_presence":
+      return {};
+    case "desktop_sync_conflicts":
+      return {
+        conflicts: sync.conflicts.filter((c) => a.state === "all" || c.state === (a.state ?? "open")),
+      };
+    case "desktop_sync_resolve_conflict": {
+      const c = sync.conflicts.find((x) => x.id === a.id) ?? fail("NOT_FOUND", "冲突记录不存在。");
+      if (c.state !== "open") fail("VALIDATION_ERROR", "这条冲突已处理。");
+      c.state = a.action === "restore" ? "restored" : "dismissed";
+      sync.seq++;
+      return {};
+    }
+    case "desktop_sync_invite":
+      if (!sync.linked) fail("VALIDATION_ERROR", "尚未连接协同。");
+      return {
+        code: "DEMO-" + key().slice(0, 8).toUpperCase(),
+        role: a.role,
+        expires_at: new Date(Date.now() + (a.ttl_hours ?? 72) * 3_600_000).toISOString(),
+        max_uses: a.max_uses ?? 1,
+      } satisfies SyncInvite;
     case "desktop_get_settings":
       return { approval_mode: approvalMode };
     case "desktop_set_settings":
@@ -581,7 +776,7 @@ function demoHandler(method: string, a: Record<string, any>): unknown {
       return {
         service_version: "preview",
         ipc_version: 1,
-        schema_version: 2,
+        schema_version: 4,
         uptime_seconds: 1234,
         database_bytes: 98304,
         items_active: items.length,

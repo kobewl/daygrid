@@ -1,18 +1,41 @@
 import { useState } from "react";
-import type { Item } from "../api";
+import type { Item, SyncPeer } from "../api";
 import { addDays, dayTitle, weekdayLong } from "../lib/dates";
+import { isPast, reminderLabel, toInput } from "../lib/reminder";
 import { cx } from "../lib/util";
 import { kindLabel, type DayInfo, type MarkValue } from "../lib/workday";
+import { Avatars } from "./Avatars";
 import { Icon } from "./icons";
 import { firstNoteLine, Markdown } from "./Markdown";
 import { Segmented } from "./Segmented";
 
+/** 事项行上的提醒角标。「已过」只在渲染时判断，不为它挂计时器。 */
+function RemindBadge({ item, timeZone }: { item: Item; timeZone: string }) {
+  const local = toInput(item.remind_at);
+  if (!local) return null;
+  const { label, full: base } = reminderLabel(local, item.date);
+  const done = item.status === "done";
+  const muted = done || isPast(local, timeZone);
+  // 已完成事项的提醒行已删除，不会触发。
+  const full = done ? `${base}（已完成，不提醒）` : base;
+  return (
+    <span className={cx("remind-badge", muted && "past")} title={full}>
+      <Icon name="bell" size={11} />
+      <span aria-hidden="true">{label}</span>
+      <span className="sr-only">{full}</span>
+    </span>
+  );
+}
+
 export function DayPanel({
   date,
   today,
+  timeZone,
   items,
   day,
   fresh,
+  peers,
+  teamMode,
   onMark,
   onToggle,
   onOpen,
@@ -20,8 +43,14 @@ export function DayPanel({
   onQuickAdd,
   onAdd,
 }: {
+  /** 协同时：在线的同事（含他们正在看哪一天、正在编辑哪个事项）。 */
+  peers: SyncPeer[];
+  /** 连接了团队日历：事项行显示「仅自己」标记。 */
+  teamMode: boolean;
   date: string;
   today: string;
+  /** 日历时区：判断提醒是否已过。 */
+  timeZone: string;
   items: Item[];
   /** 这一天是休息日还是工作日，以及原因。 */
   day: DayInfo;
@@ -38,6 +67,8 @@ export function DayPanel({
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const done = items.filter((i) => i.status === "done").length;
+  const viewing = peers.filter((p) => p.date === date);
+  const editors = (id: string) => [...new Set(peers.filter((p) => p.editing && p.item_id === id).map((p) => p.user))];
   const relative =
     date === today
       ? "今天"
@@ -80,6 +111,12 @@ export function DayPanel({
           <Icon name="plus" />
         </button>
       </header>
+      {viewing.length > 0 && (
+        <p className="presence" role="status">
+          <Avatars peers={viewing} />
+          <span>{[...new Set(viewing.map((p) => p.user))].join("、")} 也在看这一天</span>
+        </p>
+      )}
       <section
         className={cx("daykind", day.kind, day.special && "special")}
         aria-label="这一天是休息日还是工作日"
@@ -175,6 +212,15 @@ export function DayPanel({
                 <button type="button" className="row-title">
                   {item.title}
                 </button>
+                <RemindBadge item={item} timeZone={timeZone} />
+                {teamMode && item.visibility === "private" && (
+                  <span className="vis-badge" title="仅自己可见：不会上传，同事看不到">
+                    <Icon name="lock" size={11} /> 仅自己
+                  </span>
+                )}
+                {editors(item.id).length > 0 && (
+                  <span className="row-editing">{editors(item.id).join("、")} 正在编辑…</span>
+                )}
                 {firstNoteLine(item.notes) && (
                   <div className="row-sub">
                     <Markdown source={firstNoteLine(item.notes)} inline />

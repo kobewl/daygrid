@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/daygrid", "apps/desktop"]
-default-members = ["crates/daygrid"]
+members = ["crates/daygrid", "crates/daygrid-server", "apps/desktop"]
+default-members = ["crates/daygrid", "crates/daygrid-server"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"

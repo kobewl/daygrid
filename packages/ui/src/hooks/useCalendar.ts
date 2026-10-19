@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   ApiError,
   call,
   key,
+  preview,
   requestAttention,
   type Context,
   type Item,
   type Proposal,
   type Pulse,
+  type Visibility,
 } from "../api";
 import {
   MAX_DATE,
@@ -22,8 +25,13 @@ import { useDayMarks } from "./useDayMarks";
 import { useNotify } from "./useToasts";
 import { dateInTimeZone, millisecondsUntilNextDay } from "../lib/calendarClock";
 
-export type ItemInput = Pick<Item, "date" | "title" | "notes" | "color">;
-export type ItemPatch = Partial<ItemInput>;
+export type ItemInput = Pick<Item, "date" | "title" | "notes" | "color"> & {
+  /** 只有连接了团队日历时才会传；缺省时后端按「仅自己可见」创建。 */
+  visibility?: Visibility;
+  /** 本地串 YYYY-MM-DDTHH:MM（服务端按日历时区规范化）；null 清除提醒。 */
+  remind_at?: string | null;
+};
+export type ItemPatch = Partial<Omit<ItemInput, "visibility">>;
 
 const PULSE_MS = 2000;
 const CONTEXT_EVERY = 30; // 定期核对设置；日期边界与回到前台另外立即核对。
@@ -99,6 +107,10 @@ export function useCalendar(weekStart: WeekStart) {
   const epoch = useRef(0);
   const queue = useRef<Promise<void>>(Promise.resolve());
   const inflight = useRef(0);
+  // macOS 上关窗只是隐藏（外壳发 daygrid://window-hidden / shown）；WebKit 的 document.hidden
+  // 不一定跟着变，所以两者任一成立都停止脉冲和跨日计时器，让服务能照常空闲退出。
+  const appHidden = useRef(false);
+  const suspended = useCallback(() => document.hidden || appHidden.current, []);
   ctxRef.current = context;
   itemsRef.current = items;
   rangeRef.current = { from, to, month: month ?? "", weekStart };
@@ -219,10 +231,11 @@ export function useCalendar(weekStart: WeekStart) {
       return; // 服务端仍是日期真值；不支持的本机时区交给定期刷新。
     }
     const timer = setTimeout(() => {
-      if (!document.hidden) void refreshContext();
+      // 挂起时跳过：恢复时的 tick(true) 会刷新上下文，不会漏掉跨日。
+      if (!suspended()) void refreshContext();
     }, delay + 25);
     return () => clearTimeout(timer);
-  }, [context?.today, context?.calendar_timezone, refreshContext]);
+  }, [context?.today, context?.calendar_timezone, refreshContext, suspended]);
 
   // 范围变化（翻月 / 改周起始日）时加载，并在空闲时预取相邻月份。
   useEffect(() => {
@@ -249,7 +262,8 @@ export function useCalendar(weekStart: WeekStart) {
     };
   }, [from, to, loadRange, prefetch, notify]);
 
-  // 脉冲轮询：几个整数，变了才拉数据。窗口不可见时暂停，回到前台立即检查。
+  // 脉冲轮询：几个整数，变了才拉数据。窗口不可见或被隐藏时完全停下（不发请求，也不挂计时器），
+  // 回到前台立即检查。
   const lastPulse = useRef<Pulse>();
   const lastPending = useRef(0);
   useEffect(() => {
@@ -264,7 +278,7 @@ export function useCalendar(weekStart: WeekStart) {
       if (ticking) return;
       ticking = true;
       clearTimeout(timer);
-      if (!document.hidden) {
+      if (!suspended()) {
         try {
           const c = ctxRef.current;
           let dateChanged = false;
@@ -294,10 +308,12 @@ export function useCalendar(weekStart: WeekStart) {
         }
       }
       ticking = false;
-      if (!stopped) timer = setTimeout(tick, PULSE_MS);
+      if (!stopped && !suspended()) timer = setTimeout(tick, PULSE_MS);
     };
-    const onVisible = () => {
-      if (!document.hidden) {
+    const onVisible = (e: Event) => {
+      // 收到 focus 说明窗口已经可见。
+      if (e.type === "focus") appHidden.current = false;
+      if (!suspended()) {
         clearTimeout(timer);
         void tick(true);
       }
@@ -305,15 +321,35 @@ export function useCalendar(weekStart: WeekStart) {
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     window.addEventListener("pageshow", onVisible);
+    // 订阅失败（或浏览器预览）时只靠 document.hidden。
+    let unlisten: (() => void)[] = [];
+    if (!preview) {
+      void Promise.allSettled([
+        listen("daygrid://window-hidden", () => {
+          appHidden.current = true;
+          clearTimeout(timer);
+        }),
+        listen("daygrid://window-shown", () => {
+          appHidden.current = false;
+          clearTimeout(timer);
+          void tick(true);
+        }),
+      ]).then((results) => {
+        const fns = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+        if (stopped) fns.forEach((f) => f());
+        else unlisten = fns;
+      });
+    }
     timer = setTimeout(tick, PULSE_MS);
     return () => {
       stopped = true;
+      unlisten.forEach((f) => f());
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
       window.removeEventListener("pageshow", onVisible);
     };
-  }, [context === undefined, commit, refresh, prefetch, refreshProposals, refreshContext]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [context === undefined, commit, refresh, prefetch, refreshProposals, refreshContext, suspended]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ───────────── 导航 ─────────────
   const selectDate = useCallback((date: string) => {
@@ -487,6 +523,26 @@ export function useCalendar(weekStart: WeekStart) {
     [enqueue, base, commit],
   );
 
+  /** 改变可见范围；`revision` 缺省时用本地最新版本。 */
+  const setVisibility = useCallback(
+    (id: string, visibility: Visibility, options: { revision?: number } = {}) =>
+      enqueue(async () => {
+        const current = itemsRef.current.find((i) => i.id === id);
+        const revision = options.revision ?? current?.revision;
+        if (!revision) throw new ApiError("NOT_FOUND", "事项不存在。");
+        const r = await call<{ item: Item }>("desktop_set_visibility", {
+          ...base(),
+          item_id: id,
+          expected_revision: revision,
+          visibility,
+        });
+        epoch.current++;
+        commit((prev) => prev.map((i) => (i.id === id ? r.item : i)));
+        return r.item;
+      }),
+    [enqueue, base, commit],
+  );
+
   const decide = useCallback(
     async (proposalId: string, decision: "approve" | "reject") => {
       const r = await call<{ proposal: Proposal }>("desktop_decide_proposal", {
@@ -538,6 +594,7 @@ export function useCalendar(weekStart: WeekStart) {
     refreshProposals,
     createItem,
     updateItem,
+    setVisibility,
     setStatus,
     removeItem,
     restoreItem,

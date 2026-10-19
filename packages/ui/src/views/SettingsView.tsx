@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   call,
   preview,
@@ -6,9 +7,11 @@ import {
   type ApprovalMode,
   type Diagnostics,
 } from "../api";
+import { CollabSettings } from "../components/CollabSettings";
 import { Icon } from "../components/icons";
 import { Segmented } from "../components/Segmented";
 import { SoftwareUpdate } from "../components/SoftwareUpdate";
+import type { Sync } from "../hooks/useSync";
 import type { Updater } from "../hooks/useUpdater";
 import { useNotify } from "../hooks/useToasts";
 import { relativeTime, type WeekStart } from "../lib/dates";
@@ -21,14 +24,14 @@ function Row({
   desc,
   children,
 }: {
-  title: string;
+  title?: string;
   desc?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="setting">
       <div className="setting-text">
-        <strong>{title}</strong>
+        {title && <strong>{title}</strong>}
         {desc && <p className="muted">{desc}</p>}
       </div>
       <div className="setting-control">{children}</div>
@@ -41,7 +44,9 @@ export function SettingsView({
   prefs,
   onPrefs,
   changeSequence,
+  sync,
 }: {
+  sync: Sync;
   updater: Updater;
   prefs: Prefs;
   onPrefs: (patch: Partial<Prefs>) => void;
@@ -92,6 +97,14 @@ export function SettingsView({
       setBusy(false);
     }
   };
+  const testNotification = async () => {
+    try {
+      await invoke("reminder_test");
+      notify("已发送测试通知。如果没有看到，请到「系统设置 › 通知 › 日格」检查。");
+    } catch (e) {
+      notify(typeof e === "string" ? e : (e as Error).message, { tone: "error" });
+    }
+  };
   const reveal = (target: "data" | "logs" | "backups") =>
     call("desktop_reveal", { target }).catch((e: Error) => notify(e.message, { tone: "error" }));
 
@@ -102,7 +115,7 @@ export function SettingsView({
       <header className="view-head">
         <div>
           <h1>设置</h1>
-          <p className="muted">外观、周起始日与休息日规则只保存在这台电脑上；权限设置控制 MCP 客户端如何访问日历。</p>
+          <p className="muted">外观、周起始日与休息日规则只保存在这台电脑上；多人协作让团队共用一份日历；权限设置控制 MCP 客户端如何访问日历。</p>
         </div>
       </header>
 
@@ -136,6 +149,19 @@ export function SettingsView({
       </section>
 
       <section className="card">
+        <h2>提醒</h2>
+        <Row desc="到了提醒时间，日格会在屏幕右上角弹出通知。关闭窗口不影响提醒；用 ⌘Q 退出日格后，不会再提醒。">
+          <div className="remind-test">
+            <button className="btn" onClick={testNotification} disabled={preview}>
+              <Icon name="bell" size={16} />
+              发送测试通知
+            </button>
+            {preview && <small className="muted">浏览器预览不会发送通知</small>}
+          </div>
+        </Row>
+      </section>
+
+      <section className="card">
         <h2>休息日与调休</h2>
         <Row
           title="休 / 班的默认规则"
@@ -152,6 +178,8 @@ export function SettingsView({
           />
         </Row>
       </section>
+
+      <CollabSettings sync={sync} />
 
       <section className="card">
         <h2>MCP 连接权限</h2>

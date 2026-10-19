@@ -2,6 +2,60 @@
 
 记录的是运行证据，不代表完整 v0.1 验收。各版本在 macOS / Apple Silicon、Rust 稳定版、Node 22、pnpm 10.33.2 上验证，最新的在最前。0.1.0 的记录保留在文末。
 
+## 提醒（0.5.0）
+
+在独立工作区（分支 `feat/item-reminders`）验证。**没有打包 `.app`，也没有启动 `tauri dev` 或图形界面**；下面「手动步骤」里的项目都还没有做。
+
+### 0.5.0 评审修复
+
+在工作区 `.worktrees/release-0.5.0`（分支 `fix/reminder-nits-0.5.0`）验证，2026-10-19：
+
+- `pnpm check`：通过（版本 0.5.0 一致、fmt、clippy `-D warnings`、类型检查与前端构建）。
+- `pnpm test`：前端 30 项通过（新增 1 项）；Rust 158 项通过（桌面端 4 项，新增 `close_action` 1 项）。
+- `pnpm test:mcp`：PASS，10 个工具。
+- `node scripts/check-version.mjs v0.5.0`：7 处版本、标签与 CHANGELOG 全部 ok。
+- `APPLE_SIGNING_IDENTITY="-" pnpm build --config '{"bundle":{"createUpdaterArtifacts":false}}'`：生成 `target/release/bundle/macos/Daygrid.app`（0.5.0，22.99 MiB）。**只打包，没有启动**。
+
+各修复的验证方式：
+
+- 只读对话框的初始焦点：只做了类型检查和构建（这个包没有 DOM 测试），没有在预览或应用里手动确认焦点位置。
+- 事项日期中途清空后的提醒平移：`reminder.test.mjs` 新增一项，覆盖 A → "" → B 按 B − A 平移、连续两次空值、提醒与事项不在同一天，以及直接改提醒仍标记 `remindTouched`。
+- 全屏关窗：只有构建、`close_action` 单元测试，以及对 AppKit 通知和 tao 0.37.1 源码（`set_fullscreen` 同步改状态、`window_did_exit_fullscreen` 才恢复窗口）的推理。**全屏关窗只做了推理和编译检查，未实机验证**；手动步骤 3b 仍在「未验证」里。
+
+### 自动检查
+
+- `pnpm check`：版本一致、`cargo fmt --check`、`clippy --workspace --all-targets -D warnings`、TypeScript 类型检查与前端生产构建通过。
+- `pnpm test`：前端 30 项（新增 `reminder.test.mjs` 16 项：`toInput` / `splitReminder` / `joinReminder` 含不完整情况、上海与纽约的 `nowInZone`、`isPast` 同一分钟不算过去、`defaultReminder` 含 23:30 → 23:59、跨月跨年平移、`zhDateTime`、`reminderLabel`、`sameRemindAt`、`reminderDirty`（null/null 不算改动、只填日期算改动）、`applyReminderEdit`（改时间 / 取消 / 设置都标记为改过，改事项日期只平移不标记，日期中途清空后仍按最近一次有效日期平移））。Rust：`daygrid` 单元 60、`approvals` 7、`day_marks` 4、`maintenance` 12、`reminders` 21、`storage` 3、桌面端 4、`collab` 30、`server_db` 17，共 158 项通过。
+  - `reminders`：存储往返与规范化、`null` 清除、完成 / 删除 / 重新打开 / 恢复、只改日期时平移、MCP 身份写入、all_writes 提交严格 / 批准放宽、只读成员只改提醒、200 次随机操作后的表不变量、只触发一次、24 小时补发与作废、提示文件重写、MCP 校验错误与夏令时、`daygrid_list_reminders`、`context.now`、旧回执与已批准请求补 `remind_at: null`，以及用虚拟时钟驱动真实 `Store` 的调度测试（只通知 1 次、不忙循环）。
+  - `maintenance`：两份契约与代码同步（10 个工具）、v3→v5 与 v4→v5 迁移并生成有效的 `pre-v5.bak`、迁移时为已有提醒补建行、备份失败或 backfill 失败时版本号不变。
+  - `collab`：共享事项上的提醒不进 outbox、同事改标题后保留、改日期后平移且不产生 outbox、同事删除后提醒行删除、只读成员可以设置提醒。
+  - 桌面端：`NotificationCenterDelegate` 类存在，补 `shouldPresentNotification:` 返回 true 且幂等；`close_action`（全屏先退出、退出中再关窗不做事、3 秒后视为失败）。
+- `pnpm test:mcp`：官方 Rust SDK 子进程联调通过：10 个工具；本地格式创建带提醒的事项并返回规范串；`daygrid_list_reminders` 列出；`patch {"remind_at":null}` 清除；`"tomorrow 9am"` 返回 `VALIDATION_ERROR` 和 `details.now`；`context.now` 带秒。
+- 性能基线（release，`cargo test -p daygrid --release --locked --test maintenance performance`，1 万条事项、1 千个提醒，测试进程内单次测量）：`next_reminder_due` 0.003 ms（阈值 1 ms），`take_due_reminders_at` 一次取满 200 条 1.28 ms（阈值 10 ms），`pulse` 0.02 ms。
+
+### 手动步骤（需要打包后的 `.app`，尚未执行）
+
+开发模式下通知以 Terminal 的身份发出，下面的步骤只能在打包应用上做。
+
+1. `APPLE_SIGNING_IDENTITY="-" pnpm build --config '{"bundle":{"createUpdaterArtifacts":false}}'`，打开 `target/release/bundle/macos/Daygrid.app`。
+2. 日格在前台时点设置页「发送测试通知」：右上角出现横幅，**听到系统默认提示音**，「系统设置 › 通知」里出现日格。
+3. 窗口可见、日格在前台时，设一个 2 分钟后的提醒，保持日格在前台等待：右上角出现横幅并有提示音；记录实际触发时刻与设定时刻之差（目标 ≤1 秒）。
+   3a. 设一个 2 分钟后的提醒，⌘W 隐藏窗口后不切换应用（菜单栏仍显示「日格」），等待：横幅照常出现并有提示音。
+   3b. 窗口全屏（绿灯或 ⌃⌘F）后按 ⌘W，再试一次红灯：先播放退出全屏动画，再隐藏窗口；不留下黑色或空白的全屏空间（调度中心里没有多出的空间）；动画期间连按 ⌘W 不报错。点程序坞图标：窗口以普通大小出现并获得焦点，界面立即刷新。全屏时 ⌘Q 直接退出。
+4. 隐藏窗口 6 分钟：`logs/` 里服务出现 `service stopped (idle)`，期间没有 `desktop_pulse` 调用记录（未连接团队时）。
+5. App Nap 测量：隐藏窗口 ≥10 分钟，在活动监视器的「App Nap」列确认日格为「是」；然后用 MCP 设一条 2 分钟后的提醒，记录实际触发延迟 D。D ≤ 60 秒为通过。设计里的回退方案（提前 5 分钟开始短时 activity，`NAP_LEAD_MS = 300 s`）**这次没有实现**：60 < D ≤ 300 秒时再实施并重测（重测应 ≤1 秒）；D > 300 秒时回到设计评审。
+6. ⌘Q 后到点不触发；24 小时内重新启动，5 秒内补发，正文带「错过的提醒 · 」；超过 24 小时不补发。
+7. 清除提醒、标为完成、删除后到点不触发；拖拽改期 +1 天后提醒变成新日期的同一时刻，修改记录里出现「提醒」字段的变化。
+8. 让电脑睡眠跨过提醒时间，唤醒后 60 秒内触发；记录实际延迟。
+9. 点击通知，记录日格是否被激活、隐藏的窗口是否被带到前台（已知可能需要再点一次程序坞图标）。
+10. 窗口隐藏、有 5 个以上待触发提醒时：用 `sample <pid> 1` 或活动监视器「取样进程」按线程名确认，新增的常驻线程只有一个名为 `reminders` 的线程；活动监视器里闲置 CPU 为 0.0%；记录内存。
+
+### 未验证
+
+- 以上手动步骤全部未做：通知外观与提示音、前台横幅、关窗隐藏与程序坞 Reopen、全屏关窗（3b）、⌘Q、补发、睡眠唤醒、点击激活、App Nap 实际延迟、线程与空闲 CPU / 内存。
+- 界面改动（提醒一栏、角标、月历铃铛、设置页卡片、隐藏时停止脉冲）只通过了类型检查、构建和纯函数测试，没有在浏览器预览或 WKWebView 里手动走过：没动过的对话框关闭不弹确认、改提醒时间后保存、「取消提醒」后保存这几条都还没有人工确认。
+- 窗口事件 `daygrid://window-hidden` / `window-shown` 的订阅只做了编译检查，前端是否按预期停掉脉冲需要在打包应用里看日志确认（步骤 4）。
+
 ## 0.3.1（日期刷新与月历布局）
 
 2026-10-13，macOS Apple Silicon。在独立工作区验证，未替换、更新或重启本机正在运行的 0.3.0 应用。

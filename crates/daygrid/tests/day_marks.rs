@@ -1,5 +1,5 @@
 //! 休息日 / 工作日标记（调休）：读写、清除、校验与 v2 → v3 迁移。
-use daygrid::store::Store;
+use daygrid::store::{SCHEMA_VERSION, Store};
 use serde_json::{Value, json};
 
 fn call(store: &mut Store, actor: &str, method: &str, args: Value) -> Value {
@@ -124,10 +124,14 @@ fn v2_database_migrates_and_keeps_existing_data() {
             .unwrap();
     }
     let mut store = Store::open(&path, "secret").unwrap();
-    assert!(dir.path().join("calendar.db.pre-v3.bak").exists());
+    assert!(
+        dir.path()
+            .join(format!("calendar.db.pre-v{SCHEMA_VERSION}.bak"))
+            .exists()
+    );
     assert_eq!(
         call(&mut store, "desktop", "desktop_diagnostics", json!({}))["data"]["schema_version"],
-        3
+        SCHEMA_VERSION
     );
     call(
         &mut store,

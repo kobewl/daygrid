@@ -1,7 +1,8 @@
 use crate::{
     Error, Result, VERSION,
     domain::{self, Item},
-    ipc, success,
+    ipc, reminder, success,
+    sync::ItemFields,
 };
 use chrono::{Datelike, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as Sql};
@@ -12,11 +13,16 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Instant,
 };
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 3;
+mod reminders;
+mod sync_ops;
+pub use sync_ops::{ApplyStats, PushBatch, SyncConfig, insecure_url, normalize_url};
+
+pub const SCHEMA_VERSION: i64 = 5;
 /// 助手发起的待确认请求有效期。
 pub const PROPOSAL_TTL_MINUTES: i64 = 10;
 /// 助手活动审计最多保留的条数。
@@ -25,9 +31,10 @@ const ACTIVITY_KEEP: i64 = 2000;
 const BACKUPS_KEEP: usize = 10;
 pub const APPROVAL_MODES: [&str; 2] = ["deletes", "all_writes"];
 
-const READ_METHODS: [&str; 5] = [
+const READ_METHODS: [&str; 6] = [
     "daygrid_get_context",
     "daygrid_list_items",
+    "daygrid_list_reminders",
     "daygrid_get_item",
     "daygrid_month_overview",
     "daygrid_get_proposal",
@@ -159,6 +166,10 @@ pub struct Store {
     desktop_verifier: String,
     cursor_secret: String,
     started: Instant,
+    /// 协同同步线程与界面共享的易失状态（连接请求、在线成员等）。
+    runtime: Arc<crate::sync::runtime::Runtime>,
+    /// 最近一次写进提示文件的值；None = 还没写过（第一次总会写）。
+    reminder_hint: Option<Option<i64>>,
 }
 
 /// 写入前置检查的结果：要么这是一次重放，要么可以继续。
@@ -195,7 +206,11 @@ impl ProposalRow {
             "created_at":self.created_at,"expires_at":self.expires_at,"decided_at":self.decided_at,
         });
         match (&outcome, self.state.as_str()) {
-            (Some(o), "approved") => v["result"] = o["data"].clone(),
+            (Some(o), "approved") => {
+                let mut o = o.clone();
+                with_remind_at(&mut o);
+                v["result"] = o.get_mut("data").map_or(Value::Null, Value::take);
+            }
             (Some(o), "failed") => v["error"] = o["error"].clone(),
             _ => {}
         }
@@ -269,6 +284,15 @@ impl Store {
                 "CREATE TABLE IF NOT EXISTS day_marks(date TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('rest','work')),updated_at TEXT NOT NULL);",
             )?;
         }
+        // 0.5.0：多人协同。outbox（待推送变更）、服务端快照、冲突表；对不连接协同的用户是空表。
+        // 建表是幂等的，并补齐开发期 v4 库缺的列，所以每次打开都执行。
+        sync_ops::create_tables(&db)?;
+        // 0.5.0：提醒的派生表（幂等，每次打开都执行，与 sync 表一样）。
+        reminders::create_tables(&db)?;
+        if version < 5 {
+            // 一次性：给 body 里已有 remind_at 的事项补行，让不变量在任何来源的数据库上都成立。
+            reminders::backfill(&db, Utc::now().timestamp_millis())?;
+        }
         db.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"))?;
         let generation = Uuid::new_v4().to_string();
         db.execute(
@@ -284,13 +308,17 @@ impl Store {
             "INSERT OR IGNORE INTO metadata VALUES('timezone',?1)",
             [timezone],
         )?;
-        Ok(Self {
+        let mut store = Self {
             db,
             path: path.to_path_buf(),
             desktop_verifier: digest(desktop_token),
             cursor_secret: desktop_token.to_string(),
             started: Instant::now(),
-        })
+            runtime: Arc::new(Default::default()),
+            reminder_hint: None,
+        };
+        store.refresh_reminder_hint();
+        Ok(store)
     }
 
     fn data_dir(&self) -> &Path {
@@ -302,6 +330,19 @@ impl Store {
             .query_row("SELECT value FROM metadata WHERE key=?1", [key], |r| {
                 r.get(0)
             })?)
+    }
+    /// 日历时区（第一次打开数据库时写入，之后不变）。
+    fn calendar_tz(&self) -> Result<chrono_tz::Tz> {
+        self.metadata("timezone")?
+            .parse::<chrono_tz::Tz>()
+            .map_err(|_| Error::new("STORAGE_ERROR", "日历时区无效。"))
+    }
+    fn time_ctx(&self, strict: bool) -> Result<domain::TimeCtx> {
+        Ok(domain::TimeCtx {
+            tz: self.calendar_tz()?,
+            now: Utc::now(),
+            strict,
+        })
     }
     fn metadata_opt(&self, key: &str) -> Result<Option<String>> {
         Ok(self
@@ -351,6 +392,11 @@ impl Store {
         }
     }
 
+    /// 校验是不是桌面通道（供服务进程在锁外执行网络请求前使用）。
+    pub fn is_desktop(&self, actor: &str, token: &str) -> bool {
+        actor == "desktop" && digest(token) == self.desktop_verifier
+    }
+
     pub fn call(&mut self, actor: &str, token: &str, method: &str, args: Value) -> Value {
         let started = Instant::now();
         let summary_args = if actor == "desktop" {
@@ -361,6 +407,8 @@ impl Store {
         let value = self
             .dispatch(actor, token, method, args)
             .unwrap_or_else(|e| e.value());
+        // 任何调用都可能改变最早的待触发时间；只是一次部分索引查询，变了才写文件。
+        self.refresh_reminder_hint();
         if actor != "desktop" {
             self.record_activity(actor, method, &summary_args, &value, started.elapsed());
         }
@@ -431,6 +479,7 @@ impl Store {
         match method {
             "daygrid_get_context" => self.context(&args),
             "daygrid_list_items" => self.list(args),
+            "daygrid_list_reminders" => self.list_reminders(&args),
             "daygrid_get_item" => {
                 let a: domain::Get = domain::decode(&args)?;
                 domain::uuid(&a.item_id)?;
@@ -452,7 +501,8 @@ impl Store {
             | "daygrid_set_item_status"
             | "daygrid_delete_item"
             | "desktop_delete"
-            | "desktop_restore" => self.write(actor, method, args),
+            | "desktop_restore"
+            | "desktop_set_visibility" => self.write(actor, method, args),
             "desktop_history" => self.history(&args),
             "desktop_connections" => self.connections(),
             "desktop_create_connection" => self.create_connection(&args),
@@ -462,10 +512,26 @@ impl Store {
             "desktop_decide_proposal" => self.decide(&args),
             "desktop_search" => self.search(&args),
             "desktop_pulse" => self.pulse(),
+            "desktop_take_due_reminders" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Empty {}
+                let _: Empty = domain::decode(&args)?;
+                self.take_due_reminders_at(Utc::now())
+            }
             "desktop_diagnostics" => self.diagnostics(),
             "desktop_backup" => self.backup(),
             "desktop_list_day_marks" => self.list_day_marks(&args),
             "desktop_set_day_mark" => self.set_day_mark(&args),
+            "desktop_sync_status" => self.sync_status(),
+            "desktop_sync_connect" => self.sync_connect(&args),
+            "desktop_sync_disconnect" => {
+                self.sync_unlink()?;
+                Ok(success(json!({})))
+            }
+            "desktop_sync_presence" => self.sync_presence(&args),
+            "desktop_sync_conflicts" => self.sync_conflicts(&args),
+            "desktop_sync_resolve_conflict" => self.sync_resolve_conflict(&args),
             "desktop_get_settings" => Ok(success(json!({"approval_mode":self.approval_mode()?}))),
             "desktop_set_settings" => {
                 #[derive(Deserialize)]
@@ -499,9 +565,11 @@ impl Store {
         let tz = timezone
             .parse::<chrono_tz::Tz>()
             .map_err(|_| Error::new("STORAGE_ERROR", "日历时区无效。"))?;
-        let now = Utc::now().with_timezone(&tz);
+        let utc_now = Utc::now();
+        let now = utc_now.with_timezone(&tz);
         Ok(success(json!({
             "today":now.format("%Y-%m-%d").to_string(),
+            "now":domain::canonical_now(tz, utc_now),
             "weekday":now.weekday().to_string(),
             "week_starts_on":"monday",
             "calendar_timezone":timezone,
@@ -933,7 +1001,8 @@ impl Store {
             "change_sequence":self.sequence()?,
             "pending_proposals":pending,
             "proposal_rev":newest,
-            "activity_sequence":activity
+            "activity_sequence":activity,
+            "sync_sequence":self.runtime.seq()
         })))
     }
 
@@ -1071,6 +1140,7 @@ impl Store {
             let mut value: Value = serde_json::from_str(&body)
                 .map_err(|_| Error::new("STORAGE_ERROR", "回执无法读取。"))?;
             value["replayed"] = json!(true);
+            with_remind_at(&mut value);
             return Ok(Pre::Replay(value));
         }
         Ok(Pre::Go {
@@ -1087,13 +1157,13 @@ impl Store {
         if actor != "desktop" && self.needs_approval(method)? {
             return self.propose(actor, method, &args, &key, &hash);
         }
-        self.apply(actor, method, &args, &key, &hash)
+        self.apply(actor, method, &args, &key, &hash, true)
     }
 
     fn target(method: &str, args: &Value) -> Result<(String, i64)> {
         Ok(match method {
             "daygrid_update_item" => {
-                let a: domain::Update = domain::decode(args)?;
+                let a: domain::Update = domain::decode_update(args)?;
                 (a.item_id, a.expected_revision)
             }
             "daygrid_set_item_status" => {
@@ -1102,6 +1172,10 @@ impl Store {
             }
             "daygrid_delete_item" => {
                 let a: domain::Delete = domain::decode(args)?;
+                (a.item_id, a.expected_revision)
+            }
+            "desktop_set_visibility" => {
+                let a: domain::SetVisibility = domain::decode(args)?;
                 (a.item_id, a.expected_revision)
             }
             _ => {
@@ -1118,12 +1192,21 @@ impl Store {
         args: &Value,
         key: &str,
         hash: &str,
+        strict: bool,
     ) -> Result<Value> {
         let now = Utc::now().to_rfc3339();
         let operation_id = Uuid::new_v4().to_string();
+        let viewer = self.sync_is_viewer()?;
+        let ctx = self.time_ctx(strict)?;
         let (mut item, before, action, expected) = match method {
             "daygrid_create_item" => {
-                let a: domain::Create = domain::decode(args)?;
+                let a: domain::Create = domain::decode_create(args)?;
+                let remind_at = a
+                    .remind_at
+                    .map(|s| domain::parse_remind_at(&s, ctx.tz, ctx.now, ctx.strict))
+                    .transpose()?
+                    .map(|r| r.text);
+                let visibility = self.create_visibility(actor, a.visibility.as_deref())?;
                 let mut i = Item {
                     id: Uuid::new_v4().to_string(),
                     date: a.date,
@@ -1134,6 +1217,8 @@ impl Store {
                     revision: 1,
                     created_at: now.clone(),
                     updated_at: now.clone(),
+                    visibility,
+                    remind_at,
                 };
                 domain::validate(&mut i)?;
                 (i, None, "create", None)
@@ -1152,8 +1237,8 @@ impl Store {
                 let before = i.clone();
                 let action = match method {
                     "daygrid_update_item" => {
-                        let a: domain::Update = domain::decode(args)?;
-                        a.patch.apply(&mut i)?;
+                        let a: domain::Update = domain::decode_update(args)?;
+                        a.patch.apply(&mut i, &ctx)?;
                         "update"
                     }
                     "daygrid_set_item_status" => {
@@ -1164,11 +1249,36 @@ impl Store {
                     }
                     "desktop_delete" | "daygrid_delete_item" => "delete",
                     "desktop_restore" => "restore",
+                    "desktop_set_visibility" => {
+                        let a: domain::SetVisibility = domain::decode(args)?;
+                        if a.visibility == "shared" {
+                            self.ensure_linked_for_sharing()?;
+                        }
+                        i.visibility = a.visibility;
+                        domain::validate(&mut i)?;
+                        "visibility"
+                    }
                     _ => unreachable!(),
                 };
                 (i, Some(before), action, Some(revision))
             }
         };
+        // 只读成员不能写团队共享的事项（不管是手工、助手还是批准后的助手请求）；自己私有的事项照常可写。
+        // 例外：只改了本机提醒（团队字段和可见范围都没变）。提醒不同步，不影响团队里的事项。
+        let reminder_only = action == "update"
+            && before.as_ref().is_some_and(|b| {
+                ItemFields::from(b) == ItemFields::from(&item) && b.visibility == item.visibility
+            });
+        if viewer
+            && !reminder_only
+            && (item.visibility == "shared"
+                || before.as_ref().is_some_and(|b| b.visibility == "shared"))
+        {
+            return Err(Error::new(
+                "PERMISSION_DENIED",
+                "你在团队日历里是只读成员，不能修改共享的事项。",
+            ));
+        }
         let changed = before.as_ref() != Some(&item) || matches!(action, "delete" | "restore");
         let mut sequence = self.sequence()?;
         let tx = self.db.transaction()?;
@@ -1209,7 +1319,21 @@ impl Store {
             "INSERT INTO receipts VALUES(?1,?2,?3,?4)",
             params![actor, key, hash, result.to_string()],
         )?;
+        if changed {
+            // 提醒行与事项写入在同一个事务里维护（不变量见 store/reminders.rs）。
+            reminders::sync_row(
+                &tx,
+                &item,
+                action == "delete",
+                Utc::now().timestamp_millis(),
+            )?;
+            // 已连接协同时，同一事务里写入 outbox（手工修改与 MCP 写入走同一条路径）。
+            sync_ops::enqueue_local(&tx, &item.id)?;
+        }
         tx.commit()?;
+        if changed {
+            self.runtime.wake();
+        }
         Ok(result)
     }
 
@@ -1239,9 +1363,16 @@ impl Store {
     /// 校验这次写入（不落库）并生成给用户看的摘要与前后对比。
     fn preview(&self, method: &str, args: &Value) -> Result<(String, Value)> {
         let now = Utc::now().to_rfc3339();
+        // 提交确认请求时严格检查：助手在提交时就会知道提醒时间已经过去。
+        let ctx = self.time_ctx(true)?;
         Ok(match method {
             "daygrid_create_item" => {
-                let a: domain::Create = domain::decode(args)?;
+                let a: domain::Create = domain::decode_create(args)?;
+                let remind_at = a
+                    .remind_at
+                    .map(|s| domain::parse_remind_at(&s, ctx.tz, ctx.now, ctx.strict))
+                    .transpose()?
+                    .map(|r| r.text);
                 let mut i = Item {
                     id: Uuid::new_v4().to_string(),
                     date: a.date,
@@ -1252,10 +1383,13 @@ impl Store {
                     revision: 1,
                     created_at: now.clone(),
                     updated_at: now,
+                    visibility: "private".into(),
+                    remind_at,
                 };
                 domain::validate(&mut i)?;
+                let note = reminder_note(i.remind_at.is_some().then_some(i.remind_at.as_deref()));
                 (
-                    format!("创建「{}」· {}", short(&i.title), i.date),
+                    format!("创建「{}」· {}{note}", short(&i.title), i.date),
                     json!({"kind":"create","before":null,"after":i}),
                 )
             }
@@ -1274,9 +1408,11 @@ impl Store {
                 let mut after = before.clone();
                 let (kind, summary) = match method {
                     "daygrid_update_item" => {
-                        let a: domain::Update = domain::decode(args)?;
-                        a.patch.apply(&mut after)?;
-                        ("update", format!("修改「{}」", short(&before.title)))
+                        let a: domain::Update = domain::decode_update(args)?;
+                        let touched = a.patch.remind_at.is_some();
+                        a.patch.apply(&mut after, &ctx)?;
+                        let note = reminder_note(touched.then_some(after.remind_at.as_deref()));
+                        ("update", format!("修改「{}」{note}", short(&before.title)))
                     }
                     "daygrid_set_item_status" => {
                         let a: domain::Status = domain::decode(args)?;
@@ -1439,7 +1575,8 @@ impl Store {
             match self.preflight(&row.actor, &row.method, &args_value) {
                 Ok(Pre::Replay(v)) => Ok(v),
                 Ok(Pre::Go { key, hash }) => {
-                    self.apply(&row.actor, &row.method, &args_value, &key, &hash)
+                    // 批准时不严格检查「已经过去」：用户可能在提醒时间过后才批准，过期的提醒直接作废。
+                    self.apply(&row.actor, &row.method, &args_value, &key, &hash, false)
                 }
                 Err(e) => Err(e),
             }
@@ -1456,6 +1593,22 @@ impl Store {
         Ok(success(
             json!({"proposal":self.proposal(&row.id)?.to_json(true)}),
         ))
+    }
+}
+
+/// 升级前写下的回执 / 确认结果里的事项没有 remind_at；按新 schema 补成 null。
+fn with_remind_at(v: &mut Value) {
+    if let Some(item) = v.pointer_mut("/data/item").and_then(Value::as_object_mut) {
+        item.entry("remind_at").or_insert(Value::Null);
+    }
+}
+
+/// 确认摘要里的提醒部分：`None` = 没涉及提醒；`Some(None)` = 取消；`Some(Some(t))` = 设置。
+fn reminder_note(remind_at: Option<Option<&str>>) -> String {
+    match remind_at {
+        Some(Some(t)) => format!(" · 提醒 {}", reminder::zh_datetime(t)),
+        Some(None) => " · 取消提醒".into(),
+        None => String::new(),
     }
 }
 
@@ -1482,6 +1635,10 @@ fn activity_summary(method: &str, args: &Value, value: &Value) -> String {
             args["from_date"].as_str().unwrap_or("?"),
             args["to_date"].as_str().unwrap_or("?"),
             data["total_items"]
+        ),
+        "daygrid_list_reminders" => format!(
+            "查询提醒，{} 条",
+            data["items"].as_array().map_or(0, Vec::len)
         ),
         "daygrid_get_item" => format!("读取事项「{}」", title(data)),
         "daygrid_get_proposal" => format!(
@@ -1516,6 +1673,7 @@ fn tool_label(method: &str) -> &'static str {
     match method {
         "daygrid_get_context" => "读取上下文",
         "daygrid_list_items" => "查询事项",
+        "daygrid_list_reminders" => "查询提醒",
         "daygrid_get_item" => "读取事项",
         "daygrid_month_overview" => "读取概览",
         "daygrid_get_proposal" => "查询确认结果",
@@ -1529,4 +1687,34 @@ fn tool_label(method: &str) -> &'static str {
 
 pub fn is_read_method(method: &str) -> bool {
     READ_METHODS.contains(&method)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_remind_at_only_fills_a_missing_item_field() {
+        // 没有 data.item：原样不动
+        for original in [
+            json!({"ok":false,"error":{"code":"NOT_FOUND"}}),
+            json!({"ok":true,"data":{"pending_approval":true}}),
+            json!({"ok":true,"data":{"item":"not an object"}}),
+        ] {
+            let mut v = original.clone();
+            with_remind_at(&mut v);
+            assert_eq!(v, original);
+        }
+        // 升级前的事项：补成 null
+        let mut v = json!({"ok":true,"data":{"item":{"id":"x"},"changed":true}});
+        with_remind_at(&mut v);
+        assert_eq!(
+            v,
+            json!({"ok":true,"data":{"item":{"id":"x","remind_at":null},"changed":true}})
+        );
+        // 已有值：不覆盖
+        let mut v = json!({"data":{"item":{"remind_at":"2026-10-20T09:00:00+08:00"}}});
+        with_remind_at(&mut v);
+        assert_eq!(v["data"]["item"]["remind_at"], "2026-10-20T09:00:00+08:00");
+    }
 }

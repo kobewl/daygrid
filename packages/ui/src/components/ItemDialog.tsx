@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, colorName, type Item } from "../api";
+import { ApiError, colorName, type Item, type Visibility } from "../api";
 import { MAX_DATE, MIN_DATE } from "../lib/dates";
 import { automaticColor } from "../lib/itemColor";
-import { diffItems } from "../lib/labels";
+import { diffItems, VISIBILITY_LABEL } from "../lib/labels";
+import {
+  applyReminderEdit,
+  isPast,
+  joinReminder,
+  reminderDirty,
+  splitReminder,
+  toInput,
+  type ReminderAction,
+  type ReminderParts,
+} from "../lib/reminder";
+import { rememberedVisibility } from "../lib/visibility";
 import { cx } from "../lib/util";
 import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
@@ -17,6 +28,18 @@ export type Draft = {
   notes: string;
   color: string;
   status?: Item["status"];
+  /** 连接了团队日历时才有：新建时的初始选择 / 编辑时当前的可见范围。 */
+  visibility?: Visibility;
+  /** 编辑时打开对话框那一刻的可见范围，用来判断有没有改。 */
+  originalVisibility?: Visibility;
+  /** 提醒的两个输入框（日历时区的本地值）；null = 不提醒。 */
+  reminder: ReminderParts | null;
+  /** 打开时的提醒（本地串 YYYY-MM-DDTHH:MM），用来判断有没有改。 */
+  originalRemindAt: string | null;
+  /** 用户直接动过「提醒」一栏；只有这时保存才会把 remind_at 放进 patch。 */
+  remindTouched: boolean;
+  /** 只读成员编辑共享事项：只能改自己的提醒，其他字段不可编辑。 */
+  reminderOnly: boolean;
 };
 
 export type DialogTarget =
@@ -27,12 +50,18 @@ const len = (s: string) => [...s].length;
 
 export function ItemDialog({
   target,
+  team,
+  timeZone,
   onSave,
   onToggle,
   onDelete,
   onClose,
 }: {
   target: DialogTarget;
+  /** 团队协同状态：只有连接了团队才显示「可见范围」。`viewer` 不能共享事项，只显示说明。 */
+  team?: { role: "owner" | "editor" | "viewer" } | null;
+  /** 日历时区：默认提醒时间与「已经过去」都按它计算。 */
+  timeZone: string;
   /** 返回保存后的事项；失败时抛 ApiError。 */
   onSave: (draft: Draft) => Promise<void>;
   onToggle: (item: Item) => void;
@@ -50,6 +79,16 @@ export function ItemDialog({
             notes: target.item.notes,
             color: target.item.color,
             status: target.item.status,
+            ...(team
+              ? {
+                  visibility: target.item.visibility,
+                  originalVisibility: target.item.visibility,
+                }
+              : {}),
+            reminder: splitReminder(toInput(target.item.remind_at)),
+            originalRemindAt: toInput(target.item.remind_at),
+            remindTouched: false,
+            reminderOnly: team?.role === "viewer" && target.item.visibility === "shared",
           }
         : {
             revision: 0,
@@ -57,8 +96,13 @@ export function ItemDialog({
             title: "",
             notes: "",
             color: "sage",
+            reminder: null,
+            originalRemindAt: null,
+            remindTouched: false,
+            reminderOnly: false,
+            ...(team && team.role !== "viewer" ? { visibility: rememberedVisibility() } : {}),
           },
-    [target],
+    [target, team],
   );
   const [draft, setDraft] = useState<Draft>(original);
   const [error, setError] = useState("");
@@ -86,7 +130,9 @@ export function ItemDialog({
     draft.title !== original.title ||
     draft.notes !== original.notes ||
     draft.date !== original.date ||
-    draft.color !== original.color;
+    draft.color !== original.color ||
+    draft.visibility !== original.visibility ||
+    reminderDirty(draft.reminder, draft.originalRemindAt);
   const edit = target.mode === "edit" ? target.item : undefined;
   // 配色预示：新建时保存会按标题自动分配（见 useActions.save），编辑时保留原色。
   // 与保存时用的是同一个函数，所以这里看到的就是保存后的颜色。
@@ -109,6 +155,21 @@ export function ItemDialog({
       setError("日期需要在 1900–2100 年之间。");
       return;
     }
+    const remindAt = joinReminder(next.reminder);
+    if (remindAt === undefined) {
+      setError("请选择提醒日期和时间。");
+      return;
+    }
+    // 改回打开时的原值（即使已经过去）不拦，与服务端「原值不做过去校验」一致。
+    if (
+      remindAt != null &&
+      next.remindTouched &&
+      remindAt !== next.originalRemindAt &&
+      isPast(remindAt, timeZone)
+    ) {
+      setError("提醒时间已经过去，请选择将来的时间。");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -129,6 +190,12 @@ export function ItemDialog({
     setDraft((d) => ({ ...d, [field]: value }));
     setConfirmDiscard(false);
   };
+  // 提醒一栏和事项日期的修改都走 applyReminderEdit（它决定 remindTouched 与平移）。
+  const editReminder = (action: ReminderAction) => {
+    setDraft((d) => applyReminderEdit(d, action));
+    setConfirmDiscard(false);
+  };
+  const locked = draft.reminderOnly;
 
   // 冲突时对比：「我的草稿」相对「服务里的最新版本」差在哪。
   const conflictDiff = conflict
@@ -136,6 +203,7 @@ export function ItemDialog({
         ...conflict,
         ...draft,
         status: conflict.status,
+        remind_at: joinReminder(draft.reminder) ?? null,
       } as Item)
     : [];
 
@@ -207,6 +275,13 @@ export function ItemDialog({
                         notes: conflict.notes,
                         color: conflict.color,
                         status: conflict.status,
+                        ...(team
+                          ? { visibility: conflict.visibility, originalVisibility: conflict.visibility }
+                          : {}),
+                        reminder: splitReminder(toInput(conflict.remind_at)),
+                        originalRemindAt: toInput(conflict.remind_at),
+                        remindTouched: false,
+                        reminderOnly: team?.role === "viewer" && conflict.visibility === "shared",
                       });
                       setConflict(undefined);
                     }}
@@ -248,9 +323,11 @@ export function ItemDialog({
               </em>
             </span>
             <input
-              data-autofocus
+              // 只读成员的标题框是禁用的：初始焦点改落到「提醒」一栏（唯一能用的控件）。
+              data-autofocus={locked ? undefined : true}
               value={draft.title}
               maxLength={400}
+              disabled={locked}
               onChange={(e) => change("title", e.target.value)}
               placeholder="记下你想做的事…"
               required
@@ -266,10 +343,59 @@ export function ItemDialog({
               value={draft.date}
               min={MIN_DATE}
               max={MAX_DATE}
-              onChange={(e) => change("date", e.target.value)}
+              disabled={locked}
+              onChange={(e) => editReminder({ type: "itemDate", value: e.target.value })}
               required
             />
           </label>
+
+          <div className="field remind-field" role="group" aria-labelledby="remind-label">
+            <span id="remind-label">
+              <Icon name="bell" size={14} /> 提醒
+            </span>
+            {draft.reminder ? (
+              <>
+                <div className="remind-inputs">
+                  <input
+                    type="date"
+                    min={MIN_DATE}
+                    max={MAX_DATE}
+                    aria-label="提醒日期"
+                    data-autofocus={locked ? true : undefined}
+                    value={draft.reminder.date}
+                    onChange={(e) => editReminder({ type: "date", value: e.target.value })}
+                  />
+                  <input
+                    type="time"
+                    step={60}
+                    aria-label="提醒时间"
+                    value={draft.reminder.time}
+                    onChange={(e) => editReminder({ type: "time", value: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="btn ghost icon-btn"
+                    aria-label="取消提醒"
+                    onClick={() => editReminder({ type: "clear" })}
+                  >
+                    <Icon name="x" />
+                  </button>
+                </div>
+                <small className="muted">
+                  到时会在屏幕右上角通知你。关闭窗口不影响，退出日格（⌘Q）后不会提醒。
+                </small>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="remind-empty"
+                data-autofocus={locked ? true : undefined}
+                onClick={() => editReminder({ type: "enable", timeZone })}
+              >
+                不提醒<span className="muted"> · 点击设置</span>
+              </button>
+            )}
+          </div>
 
           <div className="field">
             <div className="notes-head">
@@ -283,16 +409,19 @@ export function ItemDialog({
                   </em>
                 )}
               </span>
-              <Segmented<"edit" | "preview">
-                label="备注视图"
-                className="notes-tabs"
-                value={notesMode}
-                onChange={(mode) => (mode === "edit" ? editNotes() : setNotesMode(mode))}
-                options={[
-                  { value: "edit", label: "编辑" },
-                  { value: "preview", label: "预览" },
-                ]}
-              />
+              {/* 只读成员不能改备注，也就不需要「编辑 / 预览」切换。 */}
+              {!locked && (
+                <Segmented<"edit" | "preview">
+                  label="备注视图"
+                  className="notes-tabs"
+                  value={notesMode}
+                  onChange={(mode) => (mode === "edit" ? editNotes() : setNotesMode(mode))}
+                  options={[
+                    { value: "edit", label: "编辑" },
+                    { value: "preview", label: "预览" },
+                  ]}
+                />
+              )}
             </div>
             {notesMode === "edit" ? (
               <textarea
@@ -300,6 +429,7 @@ export function ItemDialog({
                 aria-labelledby="notes-label"
                 value={draft.notes}
                 rows={3}
+                disabled={locked}
                 onChange={(e) => change("notes", e.target.value)}
                 placeholder="补充细节、想法，或需要记住的事。支持 Markdown：**加粗**、- 列表、[文字](链接)，网址会自动变成可点击的链接"
               />
@@ -312,7 +442,7 @@ export function ItemDialog({
                   // 点链接是打开网址；点其他地方回到编辑。选中文字（复制）时不打断。
                   if ((e.target as Element).closest("a")) return;
                   if (window.getSelection()?.toString()) return;
-                  editNotes();
+                  if (!locked) editNotes();
                 }}
               >
                 {draft.notes.trim() ? (
@@ -323,6 +453,36 @@ export function ItemDialog({
               </div>
             )}
           </div>
+
+          {team && (
+            <div className="field visibility-field">
+              <span id="visibility-label">谁能看到这个事项</span>
+              {team.role === "viewer" && !(edit && edit.visibility === "shared") ? (
+                <p className="muted small">你是只读成员：这个事项只保存在你自己的电脑上，不会共享。</p>
+              ) : team.role === "viewer" ? (
+                <p className="muted small">这是团队共享的事项，只读成员只能设置自己的提醒。</p>
+              ) : (
+                <>
+                  <Segmented<Visibility>
+                    label="可见范围"
+                    value={draft.visibility ?? "private"}
+                    onChange={(v) => change("visibility", v)}
+                    options={[
+                      { value: "private", label: VISIBILITY_LABEL.private },
+                      { value: "shared", label: VISIBILITY_LABEL.shared },
+                    ]}
+                  />
+                  <small className="muted">
+                    {(draft.visibility ?? "private") === "shared"
+                      ? "团队日历里的所有成员都能看到，也能一起编辑。"
+                      : edit?.visibility === "shared"
+                        ? "保存后会从团队日历撤回，同事将不再看到它；你这里的内容原样保留。"
+                        : "只保存在这台电脑上，不会上传，同事看不到。"}
+                  </small>
+                </>
+              )}
+            </div>
+          )}
 
           {error && (
             <p className="form-error" role="alert">
@@ -362,6 +522,7 @@ export function ItemDialog({
                 <button
                   type="button"
                   className="btn ghost"
+                  disabled={locked}
                   onClick={() => {
                     onToggle(edit);
                     onClose();
@@ -373,6 +534,7 @@ export function ItemDialog({
                 <button
                   type="button"
                   className="btn ghost danger-text"
+                  disabled={locked}
                   onClick={() => {
                     onDelete(edit);
                     onClose();

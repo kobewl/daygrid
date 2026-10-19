@@ -1,8 +1,10 @@
 import { useCallback } from "react";
-import type { Item } from "../api";
+import type { Item, Visibility } from "../api";
 import type { Draft } from "../components/ItemDialog";
 import { dayTitle } from "../lib/dates";
 import { automaticColor } from "../lib/itemColor";
+import { joinReminder } from "../lib/reminder";
+import { rememberVisibility } from "../lib/visibility";
 import type { Calendar } from "./useCalendar";
 import { useNotify } from "./useToasts";
 
@@ -62,13 +64,14 @@ export function useActions(cal: Calendar) {
   );
 
   const quickAdd = useCallback(
-    async (date: string, title: string) => {
+    async (date: string, title: string, visibility?: Visibility) => {
       try {
         await cal.createItem({
           date,
           title,
           notes: "",
           color: automaticColor(title),
+          ...(visibility ? { visibility } : {}),
         });
         return true;
       } catch (e) {
@@ -82,19 +85,47 @@ export function useActions(cal: Calendar) {
   /** 对话框保存：失败时抛出，让对话框处理版本冲突并保留草稿。 */
   const save = useCallback(
     async (draft: Draft) => {
+      // 对话框已拦下不完整的提醒，这里只会是本地串或 null。
+      const remindAt = joinReminder(draft.reminder) ?? null;
+      // 只读成员编辑共享事项：请求里只带 remind_at（服务端只对这种修改放行）。
+      if (draft.id && draft.reminderOnly) {
+        if (!draft.remindTouched) return;
+        await cal.updateItem(draft.id, { remind_at: remindAt }, { revision: draft.revision });
+        notify("已保存");
+        return;
+      }
       const fields = {
         date: draft.date,
         title: draft.title,
         notes: draft.notes,
         color: draft.id ? draft.color : automaticColor(draft.title),
       };
-      if (draft.id)
-        await cal.updateItem(draft.id, fields, { revision: draft.revision });
-      else await cal.createItem(fields);
+      if (draft.visibility) rememberVisibility(draft.visibility);
+      if (draft.id) {
+        // 没动过提醒就不传：只改日期时由服务端按同样的天数平移。
+        await cal.updateItem(
+          draft.id,
+          { ...fields, ...(draft.remindTouched ? { remind_at: remindAt } : {}) },
+          { revision: draft.revision },
+        );
+        // 可见范围是单独的写入口（它还要通知同步引擎撤回 / 上传）；改了才调用。
+        if (draft.visibility && draft.visibility !== draft.originalVisibility)
+          await cal.setVisibility(draft.id, draft.visibility);
+      } else {
+        await cal.createItem({
+          ...fields,
+          ...(draft.visibility ? { visibility: draft.visibility } : {}),
+          ...(remindAt ? { remind_at: remindAt } : {}),
+        });
+      }
       cal.goDate(draft.date);
-      notify("已保存");
+      notify(
+        draft.visibility === "private" && draft.originalVisibility === "shared"
+          ? "已保存，并从团队日历撤回（同事将不再看到它）"
+          : "已保存",
+      );
     },
-    [cal.updateItem, cal.createItem, cal.goDate, notify], // eslint-disable-line react-hooks/exhaustive-deps
+    [cal.updateItem, cal.createItem, cal.setVisibility, cal.goDate, notify], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const decide = useCallback(

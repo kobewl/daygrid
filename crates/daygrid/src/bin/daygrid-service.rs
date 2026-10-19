@@ -12,6 +12,7 @@ use daygrid::{
     logging,
     store::Store,
     success,
+    sync::client as sync_client,
 };
 use fs2::FileExt;
 use serde_json::{Value, json};
@@ -34,10 +35,12 @@ use std::{
 };
 
 const IDLE_EXIT: Duration = Duration::from_secs(300);
+/// 已连接协同且还有没推送出去的修改时，多等一会儿再退出，给同步线程重试的机会。
+const IDLE_EXIT_PENDING_SYNC: Duration = Duration::from_secs(1800);
 const SLOW_REQUEST_MS: u128 = 200;
 
 struct Shared {
-    store: Mutex<Store>,
+    store: Arc<Mutex<Store>>,
     started: Instant,
     /// 最近一次活动距启动的毫秒数。
     last_activity_ms: AtomicU64,
@@ -114,16 +117,27 @@ fn run(dir: PathBuf) -> daygrid::Result<()> {
     );
 
     let shared = Arc::new(Shared {
-        store: Mutex::new(store),
+        store: Arc::new(Mutex::new(store)),
         started: Instant::now(),
         last_activity_ms: AtomicU64::new(0),
         inflight: AtomicUsize::new(0),
     });
 
+    // 协同同步线程：未连接协同时几乎不占资源。
+    sync_client::spawn(shared.store.clone());
+
     loop {
         if !wait_readable(&listener, 5000) {
             if shared.inflight.load(Ordering::Relaxed) == 0 && shared.idle_for() >= IDLE_EXIT {
-                break;
+                let pending = shared
+                    .store
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .sync_pending()
+                    .unwrap_or(0);
+                if pending == 0 || shared.idle_for() >= IDLE_EXIT_PENDING_SYNC {
+                    break;
+                }
             }
             continue;
         }
@@ -190,6 +204,10 @@ fn serve(shared: &Shared, mut stream: UnixStream) {
                     json!({"ipc_version":ipc::IPC_VERSION,"service_version":VERSION,"schema_version":daygrid::store::SCHEMA_VERSION}),
                 )
             }
+            Ok(r) if r.method == "desktop_sync_invite" => {
+                label = "desktop desktop_sync_invite".into();
+                invite(shared, &r)
+            }
             Ok(r) => {
                 label = format!(
                     "{} {}",
@@ -213,6 +231,45 @@ fn serve(shared: &Shared, mut stream: UnixStream) {
     let ms = started.elapsed().as_millis();
     let code = value["error"]["code"].as_str().unwrap_or("-");
     log_request(&label, ms, &value, code);
+}
+
+/// 生成邀请码：需要访问协同服务器，所以网络请求必须在释放 Store 锁之后进行
+/// （否则服务器慢一点就会卡住整个本地服务）。
+fn invite(shared: &Shared, r: &Request) -> Value {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Args {
+        role: String,
+        ttl_hours: Option<i64>,
+        max_uses: Option<i64>,
+    }
+    let args: Args = match daygrid::domain::decode(&r.args) {
+        Ok(a) => a,
+        Err(e) => return e.value(),
+    };
+    let (cfg, token) = {
+        let store = shared.store.lock().unwrap_or_else(|e| e.into_inner());
+        if !store.is_desktop(&r.actor, &r.token) {
+            return Error::new("PERMISSION_DENIED", "该操作只能从日格界面执行。").value();
+        }
+        match (store.sync_config(), store.sync_token()) {
+            (Ok(Some(cfg)), Ok(Some(token))) => (cfg, token),
+            _ => return Error::new("VALIDATION_ERROR", "尚未连接协同。").value(),
+        }
+    };
+    if !["editor", "viewer"].contains(&args.role.as_str()) {
+        return Error::new("VALIDATION_ERROR", "角色必须是 editor 或 viewer。").value();
+    }
+    match sync_client::create_invite(
+        &cfg,
+        &token,
+        &args.role,
+        args.ttl_hours.unwrap_or(72).clamp(1, 24 * 30),
+        args.max_uses.unwrap_or(1).clamp(1, 100),
+    ) {
+        Ok(v) => success(v),
+        Err(e) => e.into_error().value(),
+    }
 }
 
 fn log_request(label: &str, ms: u128, value: &Value, code: &str) {

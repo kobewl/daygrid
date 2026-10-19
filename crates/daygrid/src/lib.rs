@@ -2,7 +2,9 @@ pub mod clients;
 pub mod domain;
 pub mod ipc;
 pub mod logging;
+pub mod reminder;
 pub mod store;
+pub mod sync;
 pub mod tools;
 
 use serde_json::{Value, json};

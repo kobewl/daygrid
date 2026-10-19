@@ -81,7 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let client = config.serve(TokioChildProcess::new(command)?).await?;
     let tools = client.list_all_tools().await?;
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
+    assert!(tools.iter().any(|t| t.name == "daygrid_list_reminders"));
     assert!(
         tools
             .iter()
@@ -92,6 +93,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let value = context.structured_content.unwrap();
     let generation = value["data"]["calendar_generation"].clone();
+    // v0.3：上下文带当前时间（日历时区，秒精度）。
+    let now = value["data"]["now"]
+        .as_str()
+        .expect("context.now")
+        .to_string();
+    assert_eq!(now.len(), 25, "{now}");
     let args = json!({"calendar_generation":generation,"idempotency_key":Uuid::new_v4().to_string(),"date":"2026-10-15","title":"MCP 创建事项","notes":"actual stdio client","color":"sage"});
     let call = CallToolRequestParams::new("daygrid_create_item")
         .with_arguments(args.as_object().unwrap().clone());
@@ -244,6 +251,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         desktop("daygrid_get_item", json!({"item_id":item_id})).map_err(|e| e.message)?["error"]["code"],
         "NOT_FOUND"
     );
+    // ---- v0.3：提醒 ----
+    // 两天后的本地墙上时间（日历时区，不带偏移），服务端按日历时区解释并规范化。
+    let local = (chrono::DateTime::parse_from_rfc3339(&now)? + chrono::Duration::days(2))
+        .format("%Y-%m-%dT%H:%M")
+        .to_string();
+    let create = json!({"calendar_generation":generation,"idempotency_key":Uuid::new_v4().to_string(),"date":&local[..10],"title":"MCP 提醒","remind_at":local});
+    let created = client
+        .call_tool(
+            CallToolRequestParams::new("daygrid_create_item")
+                .with_arguments(create.as_object().unwrap().clone()),
+        )
+        .await?
+        .structured_content
+        .unwrap();
+    assert_eq!(created["ok"], true, "{created}");
+    let remind_at = created["data"]["item"]["remind_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // YYYY-MM-DDTHH:MM:00±HH:MM
+    assert!(
+        remind_at.len() == 25
+            && remind_at.starts_with(&local)
+            && remind_at[16..19] == *":00"
+            && matches!(&remind_at[19..20], "+" | "-"),
+        "{remind_at}"
+    );
+    let reminder_id = created["data"]["item"]["id"].clone();
+    let reminders = client
+        .call_tool(
+            CallToolRequestParams::new("daygrid_list_reminders")
+                .with_arguments(json!({"within_days":7}).as_object().unwrap().clone()),
+        )
+        .await?
+        .structured_content
+        .unwrap();
+    assert_eq!(reminders["ok"], true, "{reminders}");
+    assert_eq!(reminders["data"]["items"][0]["id"], reminder_id);
+    assert_eq!(reminders["data"]["items"][0]["remind_at"], remind_at);
+    assert_eq!(reminders["data"]["has_more"], false);
+    let clear = json!({"calendar_generation":generation,"idempotency_key":Uuid::new_v4().to_string(),"item_id":reminder_id,"expected_revision":1,"patch":{"remind_at":null}});
+    let cleared = client
+        .call_tool(
+            CallToolRequestParams::new("daygrid_update_item")
+                .with_arguments(clear.as_object().unwrap().clone()),
+        )
+        .await?
+        .structured_content
+        .unwrap();
+    assert_eq!(cleared["ok"], true, "{cleared}");
+    assert!(cleared["data"]["item"]["remind_at"].is_null());
+    let reminders = client
+        .call_tool(CallToolRequestParams::new("daygrid_list_reminders"))
+        .await?
+        .structured_content
+        .unwrap();
+    assert_eq!(reminders["data"]["items"], json!([]));
+    let bad = json!({"calendar_generation":generation,"idempotency_key":Uuid::new_v4().to_string(),"date":&local[..10],"title":"自然语言时间","remind_at":"tomorrow 9am"});
+    let rejected = client
+        .call_tool(
+            CallToolRequestParams::new("daygrid_create_item")
+                .with_arguments(bad.as_object().unwrap().clone()),
+        )
+        .await?;
+    assert_eq!(rejected.is_error, Some(true));
+    let rejected = rejected.structured_content.unwrap();
+    assert_eq!(rejected["error"]["code"], "VALIDATION_ERROR", "{rejected}");
+    assert!(rejected["error"]["details"]["now"].is_string());
     // 审计：桌面能看到助手的这些调用。
     let activity = desktop("desktop_activity", json!({})).map_err(|e| e.message)?;
     assert!(activity["data"]["activity"].as_array().unwrap().len() >= 10);
@@ -259,7 +334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     }
     println!(
-        "PASS: SDK stdio client; {} tools; resources+prompts; create/replay/update/get/list/status/overview; delete approval + long-poll; audit trail; desktop sees same SQLite data; live pause denial; protocol {}",
+        "PASS: SDK stdio client; {} tools; resources+prompts; create/replay/update/get/list/status/overview; delete approval + long-poll; reminders (create/list/clear/reject); audit trail; desktop sees same SQLite data; live pause denial; protocol {}",
         tools.len(),
         client.peer_info().unwrap().protocol_version
     );

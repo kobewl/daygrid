@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import type { Item } from "../api";
+import type { Item, SyncPeer } from "../api";
 import { DayPanel } from "../components/DayPanel";
 import { Icon } from "../components/icons";
 import { MonthGrid } from "../components/MonthGrid";
@@ -16,6 +16,7 @@ import { dayInfo } from "../lib/workday";
 
 export function CalendarView({
   cal,
+  peers,
   weekStart,
   holidays,
   keysEnabled,
@@ -25,7 +26,9 @@ export function CalendarView({
   onRemove,
   onMove,
   onQuickAdd,
+  teamMode,
 }: {
+  peers: SyncPeer[];
   cal: Calendar;
   weekStart: WeekStart;
   /** 休 / 班是否按法定节假日与调休推算。 */
@@ -38,6 +41,8 @@ export function CalendarView({
   onRemove: (item: Item) => void;
   onMove: (id: string, date: string) => void;
   onQuickAdd: (date: string, title: string) => Promise<boolean>;
+  /** 连接了团队日历。 */
+  teamMode: boolean;
 }) {
   const { context, month, selected, grid, itemsByDate, loading } = cal;
   const { goDate, goToday, shiftMonth } = cal;
@@ -170,6 +175,7 @@ export function CalendarView({
           grid={grid}
           month={month}
           today={context.today}
+          timeZone={context.calendar_timezone}
           selected={selected}
           weekStart={weekStart}
           itemsByDate={itemsByDate}
@@ -195,10 +201,13 @@ export function CalendarView({
       <DayPanel
         date={selected}
         today={context.today}
+        timeZone={context.calendar_timezone}
         items={itemsByDate.get(selected) ?? []}
         day={days.get(selected) ?? dayInfo(selected, cal.dayMarks.get(selected), holidays)}
         onMark={(value) => void cal.setDayMark(selected, value)}
         fresh={cal.fresh}
+        peers={peers}
+        teamMode={teamMode}
         onToggle={onToggle}
         onOpen={onEdit}
         onDelete={onRemove}

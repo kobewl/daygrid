@@ -4,10 +4,10 @@ import { Icon } from "../components/icons";
 import { Segmented } from "../components/Segmented";
 import { useNotify } from "../hooks/useToasts";
 import { addDays, dayTitle, toISO } from "../lib/dates";
-import { ACTION_LABEL, actorLabel, changedFields } from "../lib/labels";
+import { ACTION_LABEL, actorKind, actorLabel, changedFields } from "../lib/labels";
 import { cx } from "../lib/util";
 
-type Filter = "all" | "me" | "assistants";
+type Filter = "all" | "me" | "team" | "assistants";
 
 export function HistoryView({
   changeSequence,
@@ -53,8 +53,10 @@ export function HistoryView({
     return ok;
   }, [history]);
 
-  const rows = (history ?? []).filter((h) =>
-    filter === "all" ? true : filter === "me" ? h.actor === "desktop" : h.actor !== "desktop",
+  const rows = (history ?? []).filter(
+    (h) =>
+      filter === "all" ||
+      actorKind(h.actor) === (filter === "me" ? "me" : filter === "team" ? "member" : "assistant"),
   );
   const groups = useMemo(() => {
     const map = new Map<string, History[]>();
@@ -82,6 +84,7 @@ export function HistoryView({
           options={[
             { value: "all", label: "全部" },
             { value: "me", label: "我" },
+            { value: "team", label: "团队成员" },
             { value: "assistants", label: "AI 助手" },
           ]}
         />
@@ -100,8 +103,8 @@ export function HistoryView({
           <h2 className="group-title">{dayLabel(day)}</h2>
           <ul className="timeline">
             {list.map((h) => {
-              const diff = h.action === "update" || h.action === "status" ? changedFields(h) : [];
-              const byAssistant = h.actor !== "desktop";
+              const diff = h.action === "update" || h.action === "status" || h.action === "visibility" ? changedFields(h) : [];
+              const byAssistant = actorKind(h.actor) === "assistant";
               return (
                 <li key={h.sequence} className={cx("tl-row", h.action)}>
                   <span className={cx("tl-dot", h.action)} aria-hidden="true" />
