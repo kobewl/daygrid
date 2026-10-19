@@ -323,7 +323,8 @@ export function ItemDialog({
               </em>
             </span>
             <input
-              data-autofocus
+              // 只读成员的标题框是禁用的：初始焦点改落到「提醒」一栏（唯一能用的控件）。
+              data-autofocus={locked ? undefined : true}
               value={draft.title}
               maxLength={400}
               disabled={locked}
@@ -360,6 +361,7 @@ export function ItemDialog({
                     min={MIN_DATE}
                     max={MAX_DATE}
                     aria-label="提醒日期"
+                    data-autofocus={locked ? true : undefined}
                     value={draft.reminder.date}
                     onChange={(e) => editReminder({ type: "date", value: e.target.value })}
                   />
@@ -387,6 +389,7 @@ export function ItemDialog({
               <button
                 type="button"
                 className="remind-empty"
+                data-autofocus={locked ? true : undefined}
                 onClick={() => editReminder({ type: "enable", timeZone })}
               >
                 不提醒<span className="muted"> · 点击设置</span>
