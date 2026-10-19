@@ -24,7 +24,7 @@ MCP stdio 桥接 ─┘
 
 批量计划与事务、MCP 侧恢复与历史查询工具、备份恢复界面、全局筛选、事件订阅、时区设置、Apple 签名与公证、自动更新。
 
-## 多人协同（Unreleased，schema v4）
+## 多人协同（0.5.0，schema v4）
 
 - **拓扑**：每台电脑仍是「本地服务 + SQLite」，可选地连接一个 `daygrid-server`（axum + SQLite，服务端权威）。同步引擎在 `crates/daygrid/src/sync/`（`hlc` 混合逻辑时钟、`merge` 字段合并、`client` 推拉循环、`runtime` 连接管理），本地存储侧在 `store/sync_ops.rs`。
 - **核心不变量**：共享事项的本地内容 = 服务器快照（`sync_items`）+ 出箱（`sync_outbox`）叠加，由 `rebuild_local` 重算。所有本地写入走 `reconcile_item`：把本地内容与「有效状态」做差，产出 Create / Restore / Update / Delete 操作，每个字段带 `prev`（修改前的值）。因此被拒绝、LWW 落败、重放的操作都不会造成漂移。
@@ -35,7 +35,7 @@ MCP stdio 桥接 ─┘
 - **角色**：owner / editor / viewer 随 `PullResponse.role` 到达；降级为 viewer 时丢弃出箱并记为 `read_only` 冲突、回滚本地；viewer 仍可写私有事项。
 - **已知限制**：SSE 的 30 秒令牌复核已实现但没有端到端测试。多人协同本身没有改动 MCP 契约；同一版本里的「提醒」把 `contract_version` 升到 `0.3`（见下一节）。
 
-## 提醒（Unreleased，schema v5）
+## 提醒（0.5.0，schema v5）
 
 ```text
 界面 / MCP / 同步线程 ─IPC─▶ daygrid-service / Store ──同一事务──▶ items.body.remind_at + reminders 表

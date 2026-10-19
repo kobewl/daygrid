@@ -2,7 +2,7 @@
 
 记录的是运行证据，不代表完整 v0.1 验收。各版本在 macOS / Apple Silicon、Rust 稳定版、Node 22、pnpm 10.33.2 上验证，最新的在最前。0.1.0 的记录保留在文末。
 
-## 提醒（Unreleased）
+## 提醒（0.5.0）
 
 在独立工作区（分支 `feat/item-reminders`）验证。**没有打包 `.app`，也没有启动 `tauri dev` 或图形界面**；下面「手动步骤」里的项目都还没有做。
 
