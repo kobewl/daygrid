@@ -6,14 +6,30 @@
 
 在独立工作区（分支 `feat/item-reminders`）验证。**没有打包 `.app`，也没有启动 `tauri dev` 或图形界面**；下面「手动步骤」里的项目都还没有做。
 
+### 0.5.0 评审修复
+
+在工作区 `.worktrees/release-0.5.0`（分支 `fix/reminder-nits-0.5.0`）验证，2026-10-19：
+
+- `pnpm check`：通过（版本 0.5.0 一致、fmt、clippy `-D warnings`、类型检查与前端构建）。
+- `pnpm test`：前端 30 项通过（新增 1 项）；Rust 158 项通过（桌面端 4 项，新增 `close_action` 1 项）。
+- `pnpm test:mcp`：PASS，10 个工具。
+- `node scripts/check-version.mjs v0.5.0`：7 处版本、标签与 CHANGELOG 全部 ok。
+- `APPLE_SIGNING_IDENTITY="-" pnpm build --config '{"bundle":{"createUpdaterArtifacts":false}}'`：生成 `target/release/bundle/macos/Daygrid.app`（0.5.0，22.99 MiB）。**只打包，没有启动**。
+
+各修复的验证方式：
+
+- 只读对话框的初始焦点：只做了类型检查和构建（这个包没有 DOM 测试），没有在预览或应用里手动确认焦点位置。
+- 事项日期中途清空后的提醒平移：`reminder.test.mjs` 新增一项，覆盖 A → "" → B 按 B − A 平移、连续两次空值、提醒与事项不在同一天，以及直接改提醒仍标记 `remindTouched`。
+- 全屏关窗：只有构建、`close_action` 单元测试，以及对 AppKit 通知和 tao 0.37.1 源码（`set_fullscreen` 同步改状态、`window_did_exit_fullscreen` 才恢复窗口）的推理。**全屏关窗只做了推理和编译检查，未实机验证**；手动步骤 3b 仍在「未验证」里。
+
 ### 自动检查
 
 - `pnpm check`：版本一致、`cargo fmt --check`、`clippy --workspace --all-targets -D warnings`、TypeScript 类型检查与前端生产构建通过。
-- `pnpm test`：前端 29 项（新增 `reminder.test.mjs` 15 项：`toInput` / `splitReminder` / `joinReminder` 含不完整情况、上海与纽约的 `nowInZone`、`isPast` 同一分钟不算过去、`defaultReminder` 含 23:30 → 23:59、跨月跨年平移、`zhDateTime`、`reminderLabel`、`sameRemindAt`、`reminderDirty`（null/null 不算改动、只填日期算改动）、`applyReminderEdit`（改时间 / 取消 / 设置都标记为改过，改事项日期只平移不标记））。Rust：`daygrid` 单元 60、`approvals` 7、`day_marks` 4、`maintenance` 12、`reminders` 21、`storage` 3、桌面端 3、`collab` 30、`server_db` 17，共 157 项通过。
+- `pnpm test`：前端 30 项（新增 `reminder.test.mjs` 16 项：`toInput` / `splitReminder` / `joinReminder` 含不完整情况、上海与纽约的 `nowInZone`、`isPast` 同一分钟不算过去、`defaultReminder` 含 23:30 → 23:59、跨月跨年平移、`zhDateTime`、`reminderLabel`、`sameRemindAt`、`reminderDirty`（null/null 不算改动、只填日期算改动）、`applyReminderEdit`（改时间 / 取消 / 设置都标记为改过，改事项日期只平移不标记，日期中途清空后仍按最近一次有效日期平移））。Rust：`daygrid` 单元 60、`approvals` 7、`day_marks` 4、`maintenance` 12、`reminders` 21、`storage` 3、桌面端 4、`collab` 30、`server_db` 17，共 158 项通过。
   - `reminders`：存储往返与规范化、`null` 清除、完成 / 删除 / 重新打开 / 恢复、只改日期时平移、MCP 身份写入、all_writes 提交严格 / 批准放宽、只读成员只改提醒、200 次随机操作后的表不变量、只触发一次、24 小时补发与作废、提示文件重写、MCP 校验错误与夏令时、`daygrid_list_reminders`、`context.now`、旧回执与已批准请求补 `remind_at: null`，以及用虚拟时钟驱动真实 `Store` 的调度测试（只通知 1 次、不忙循环）。
   - `maintenance`：两份契约与代码同步（10 个工具）、v3→v5 与 v4→v5 迁移并生成有效的 `pre-v5.bak`、迁移时为已有提醒补建行、备份失败或 backfill 失败时版本号不变。
   - `collab`：共享事项上的提醒不进 outbox、同事改标题后保留、改日期后平移且不产生 outbox、同事删除后提醒行删除、只读成员可以设置提醒。
-  - 桌面端：`NotificationCenterDelegate` 类存在，补 `shouldPresentNotification:` 返回 true 且幂等。
+  - 桌面端：`NotificationCenterDelegate` 类存在，补 `shouldPresentNotification:` 返回 true 且幂等；`close_action`（全屏先退出、退出中再关窗不做事、3 秒后视为失败）。
 - `pnpm test:mcp`：官方 Rust SDK 子进程联调通过：10 个工具；本地格式创建带提醒的事项并返回规范串；`daygrid_list_reminders` 列出；`patch {"remind_at":null}` 清除；`"tomorrow 9am"` 返回 `VALIDATION_ERROR` 和 `details.now`；`context.now` 带秒。
 - 性能基线（release，`cargo test -p daygrid --release --locked --test maintenance performance`，1 万条事项、1 千个提醒，测试进程内单次测量）：`next_reminder_due` 0.003 ms（阈值 1 ms），`take_due_reminders_at` 一次取满 200 条 1.28 ms（阈值 10 ms），`pulse` 0.02 ms。
 
